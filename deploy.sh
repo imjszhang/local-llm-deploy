@@ -235,6 +235,11 @@ if [ "$HOST" = "0.0.0.0" ]; then
 else
     echo -e "${GREEN}服务地址: http://${HOST}:$PORT${NC}"
 fi
+echo -e "${GREEN}聊天: http://localhost:$PORT/${NC}"
+echo ""
+echo -e "${YELLOW}前端（含监控）需单独启动，因 API Key 认证会拦截静态文件:${NC}"
+echo "   ./serve-ui.sh"
+echo "   然后访问: http://localhost:8888/ (聊天) 或 http://localhost:8888/monitor.html (监控)"
 echo -e "${GREEN}OpenAI API: http://localhost:$PORT/v1${NC}"
 if [ -n "$HEALTH_API_KEY" ]; then
     echo ""

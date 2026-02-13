@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GLM-5 监控</title>
+    <style>
+        :root { --bg: #0f0f12; --card: #1a1a1f; --text: #e4e4e7; --muted: #71717a; --accent: #22c55e; --warn: #eab308; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1.5rem; }
+        h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+        .card { background: var(--card); border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
+        .card h2 { font-size: 0.875rem; color: var(--muted); margin-bottom: 0.5rem; text-transform: uppercase; }
+        .metric { display: flex; justify-content: space-between; padding: 0.25rem 0; font-family: ui-monospace, monospace; }
+        .metric span:last-child { color: var(--accent); }
+        .status { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%; margin-right: 0.5rem; }
+        .status.ok { background: var(--accent); }
+        .status.err { background: #ef4444; }
+        .api-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+        .api-row input { flex: 1; padding: 0.5rem; border-radius: 0.25rem; border: 1px solid #27272a; background: var(--card); color: var(--text); }
+        .api-row button { padding: 0.5rem 1rem; border-radius: 0.25rem; border: none; background: var(--accent); color: #000; cursor: pointer; font-weight: 500; }
+        .api-row button:hover { opacity: 0.9; }
+        .nav { margin-bottom: 1rem; }
+        .nav a { color: var(--muted); text-decoration: none; margin-right: 1rem; }
+        .nav a:hover { color: var(--text); }
+        .slot { padding: 0.5rem; background: #27272a; border-radius: 0.25rem; margin-bottom: 0.25rem; font-size: 0.875rem; }
+        .slot.busy { border-left: 3px solid var(--accent); }
+        .error { color: #ef4444; font-size: 0.875rem; }
+        .refresh { color: var(--muted); font-size: 0.75rem; margin-top: 0.5rem; }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/">← 聊天</a>
+    </nav>
+    <h1>GLM-5 监控</h1>
+
+    <div class="card">
+        <h2>配置</h2>
+        <div class="api-row">
+            <input type="text" id="apiBase" placeholder="API 地址，如 http://127.0.0.1:8001" style="margin-bottom:0.5rem">
+        </div>
+        <div class="api-row">
+            <input type="password" id="apiKey" placeholder="若启用认证请填入 .api-key 中的密钥">
+            <button onclick="saveKey()">保存</button>
+        </div>
+        <p class="refresh">API 地址存于 localStorage；密钥仅存于当前会话</p>
+    </div>
+
+    <div class="card">
+        <h2>健康状态</h2>
+        <div class="metric">
+            <span><span class="status" id="healthDot"></span>服务</span>
+            <span id="healthText">-</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>推理指标</h2>
+        <div id="metrics"></div>
+    </div>
+
+    <div class="card">
+        <h2>槽位状态</h2>
+        <div id="slots"></div>
+    </div>
+
+    <p class="refresh" id="lastUpdate">-</p>
+
+    <script>
+        function getKey() {
+            return sessionStorage.getItem('glm5_api_key') || '';
+        }
+        function saveKey() {
+            const base = document.getElementById('apiBase').value.trim();
+            if (base) localStorage.setItem('glm5_api_base', base);
+            sessionStorage.setItem('glm5_api_key', document.getElementById('apiKey').value);
+        }
+
+        function headers() {
+            const key = getKey();
+            const h = { 'Accept': 'application/json, text/plain' };
+            if (key) h['Authorization'] = `Bearer ${key}`;
+            return h;
+        }
+
+        function parseMetrics(text) {
+            const m = {};
+            for (const line of text.split('\n')) {
+                if (line.startsWith('llamacpp:')) {
+                    const match = line.match(/^(llamacpp:[^\s]+)\s+([\d.e+-]+)/);
+                    if (match) m[match[1]] = parseFloat(match[2]);
+                }
+            }
+            return m;
+        }
+
+        const LABELS = {
+            'llamacpp:prompt_tokens_total': 'Prompt Tokens',
+            'llamacpp:tokens_predicted_total': '生成 Tokens',
+            'llamacpp:prompt_tokens_seconds': 'Prompt 吞吐 (tokens/s)',
+            'llamacpp:predicted_tokens_seconds': '生成吞吐 (tokens/s)',
+            'llamacpp:requests_processing': '处理中请求',
+            'llamacpp:requests_deferred': '排队请求',
+            'llamacpp:n_tokens_max': '最大上下文',
+            'llamacpp:kv_cache_usage_ratio': 'KV 缓存使用率',
+        };
+
+        async function fetchAll() {
+            const apiBase = localStorage.getItem('glm5_api_base') || 'http://127.0.0.1:8001';
+            document.getElementById('apiBase').value = apiBase;
+            document.getElementById('apiKey').value = getKey();
+            try {
+                const [healthRes, metricsRes, slotsRes] = await Promise.all([
+                    fetch(apiBase + '/health', { headers: headers() }),
+                    fetch(apiBase + '/metrics', { headers: headers() }),
+                    fetch(apiBase + '/slots', { headers: headers() })
+                ]);
+
+                document.getElementById('healthDot').className = 'status ' + (healthRes.ok ? 'ok' : 'err');
+                document.getElementById('healthText').textContent = healthRes.ok ? '正常' : `错误 ${healthRes.status}`;
+
+                if (metricsRes.ok) {
+                    const text = await metricsRes.text();
+                    const m = parseMetrics(text);
+                    document.getElementById('metrics').innerHTML = Object.entries(LABELS)
+                        .filter(([k]) => k in m)
+                        .map(([k, label]) => `<div class="metric"><span>${label}</span><span>${typeof m[k] === 'number' && m[k] % 1 ? m[k].toFixed(2) : m[k]}</span></div>`)
+                        .join('') || '<div class="metric"><span>无数据</span></div>';
+                } else {
+                    document.getElementById('metrics').innerHTML = `<div class="error">${metricsRes.status === 401 ? '需认证：请填入 API Key' : '获取失败'}</div>`;
+                }
+
+                if (slotsRes.ok) {
+                    const slots = await slotsRes.json();
+                    document.getElementById('slots').innerHTML = Array.isArray(slots)
+                        ? slots.map(s => `<div class="slot ${s.is_processing ? 'busy' : ''}">#${s.id} ${s.is_processing ? '处理中' : '空闲'} ${s.params?.n_predict !== undefined ? `max=${s.params.n_predict}` : ''}</div>`).join('')
+                        : '<div class="metric"><span>无槽位数据</span></div>';
+                } else {
+                    document.getElementById('slots').innerHTML = `<div class="error">获取失败</div>`;
+                }
+            } catch (e) {
+                document.getElementById('healthDot').className = 'status err';
+                document.getElementById('healthText').textContent = '连接失败';
+                document.getElementById('metrics').innerHTML = `<div class="error">${e.message}</div>`;
+                document.getElementById('slots').innerHTML = '';
+            }
+            document.getElementById('lastUpdate').textContent = `上次更新: ${new Date().toLocaleTimeString('zh-CN')}`;
+        }
+
+        fetchAll();
+        setInterval(fetchAll, 5000);
+    </script>
+</body>
+</html>

@@ -17,6 +17,10 @@ source .venv/bin/activate
 
 # 3. 启动服务
 ./deploy.sh --cpp-dir "$(pwd)/llama.cpp" --model-dir "$(pwd)/models/GLM-5-GGUF/UD-IQ2_XXS"
+
+# 4. 启动前端（聊天 + 监控，启用认证时需单独运行）
+./serve-ui.sh
+# 访问 http://localhost:8888/ 聊天，http://localhost:8888/monitor.html 监控
 ```
 
 ## 硬件建议

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GLM-5</title>
+    <style>
+        :root { --bg: #0f0f12; --card: #1a1a1f; --text: #e4e4e7; --muted: #71717a; --accent: #22c55e; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1.5rem; max-width: 48rem; margin: 0 auto; }
+        .nav { margin-bottom: 1rem; }
+        .nav a { color: var(--muted); text-decoration: none; margin-right: 1rem; }
+        .nav a:hover { color: var(--text); }
+        h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+        .card { background: var(--card); border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
+        textarea, input { width: 100%; padding: 0.5rem; border-radius: 0.25rem; border: 1px solid #27272a; background: var(--bg); color: var(--text); font-family: inherit; }
+        textarea { min-height: 4rem; resize: vertical; }
+        button { padding: 0.5rem 1rem; border-radius: 0.25rem; border: none; background: var(--accent); color: #000; cursor: pointer; font-weight: 500; margin-top: 0.5rem; }
+        button:hover { opacity: 0.9; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .msg { padding: 0.75rem; margin: 0.5rem 0; border-radius: 0.25rem; }
+        .msg.user { background: #27272a; }
+        .msg.assistant { background: #1e1e22; white-space: pre-wrap; }
+        .api-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+        .api-row input { flex: 1; }
+        label { display: block; color: var(--muted); font-size: 0.875rem; margin-bottom: 0.25rem; }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/monitor.html">监控</a>
+    </nav>
+    <h1>GLM-5 聊天</h1>
+
+    <div class="card">
+        <label>API 地址</label>
+        <input type="text" id="apiBase" value="http://127.0.0.1:8001" placeholder="http://127.0.0.1:8001">
+        <label style="margin-top:0.5rem">API Key（若启用认证）</label>
+        <input type="password" id="apiKey" placeholder="可选">
+    </div>
+
+    <div class="card">
+        <label>System</label>
+        <textarea id="system" rows="2" placeholder="系统提示词（可选）"></textarea>
+    </div>
+
+    <div id="chat"></div>
+
+    <div class="card">
+        <textarea id="input" rows="3" placeholder="输入消息..."></textarea>
+        <button id="send">发送</button>
+    </div>
+
+    <script>
+        const chat = document.getElementById('chat');
+        const input = document.getElementById('input');
+        const send = document.getElementById('send');
+        const system = document.getElementById('system');
+        const apiKey = document.getElementById('apiKey');
+
+        let messages = [];
+
+        function addMsg(role, content) {
+            const div = document.createElement('div');
+            div.className = 'msg ' + role;
+            div.textContent = content;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        async function doSend() {
+            const text = input.value.trim();
+            if (!text) return;
+            messages.push({ role: 'user', content: text });
+            addMsg('user', text);
+            input.value = '';
+            send.disabled = true;
+
+            const msgs = [];
+            if (system.value.trim()) msgs.push({ role: 'system', content: system.value.trim() });
+            msgs.push(...messages.map(m => ({ role: m.role, content: m.content })));
+
+            const headers = { 'Content-Type': 'application/json' };
+            if (apiKey.value.trim()) headers['Authorization'] = 'Bearer ' + apiKey.value.trim();
+
+            const apiBase = document.getElementById('apiBase').value.trim() || 'http://127.0.0.1:8001';
+            try {
+                const res = await fetch(apiBase + '/v1/chat/completions', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                        model: 'unsloth/GLM-5',
+                        messages: msgs,
+                        stream: false
+                    })
+                });
+                const data = await res.json();
+                const content = data.choices?.[0]?.message?.content || (res.ok ? '' : JSON.stringify(data));
+                if (content) {
+                    messages.push({ role: 'assistant', content });
+                    addMsg('assistant', content);
+                }
+            } catch (e) {
+                addMsg('assistant', '错误: ' + e.message);
+            }
+            send.disabled = false;
+        }
+
+        send.onclick = doSend;
+        input.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); } };
+    </script>
+</body>
+</html>
