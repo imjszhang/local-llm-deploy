@@ -17,7 +17,10 @@ PORT="${PORT:-8001}"
 LOG_FILE="${LOG_FILE:-/tmp/glm5_server.log}"
 API_KEY="${API_KEY:-}"
 API_KEY_FILE="${API_KEY_FILE:-}"
-HOST="${HOST:-127.0.0.1}"
+# 默认开启局域网；若存在 .api-key 则默认使用
+HOST="${HOST:-0.0.0.0}"
+DEFAULT_API_KEY_FILE="$SCRIPT_DIR/.api-key"
+[ -z "$API_KEY" ] && [ -z "$API_KEY_FILE" ] && [ -f "$DEFAULT_API_KEY_FILE" ] && API_KEY_FILE="$DEFAULT_API_KEY_FILE"
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
@@ -50,6 +53,10 @@ while [[ $# -gt 0 ]]; do
             HOST="0.0.0.0"
             shift
             ;;
+        --no-lan)
+            HOST="127.0.0.1"
+            shift
+            ;;
         --help)
             echo "用法: $0 [选项]"
             echo ""
@@ -61,12 +68,15 @@ while [[ $# -gt 0 ]]; do
             echo "  --port PORT        服务端口 (默认: 8001)"
             echo "  --api-key KEY      API Key 认证，客户端需在 Authorization: Bearer <KEY> 中携带"
             echo "  --api-key-file F   密钥文件路径，每行一个 key，支持多 key"
-            echo "  --host HOST        监听地址 (默认: 127.0.0.1)"
+            echo "  --host HOST        监听地址 (默认: 0.0.0.0 局域网)"
             echo "  --lan              等同于 --host 0.0.0.0，允许局域网访问"
+            echo "  --no-lan           仅本机访问，等同于 --host 127.0.0.1"
+            echo ""
+            echo "默认行为: 局域网访问、启用 /metrics、若存在 .api-key 则启用认证"
             echo ""
             echo "示例:"
             echo "  $0 --cpp-dir $SCRIPT_DIR/llama.cpp --model-dir $SCRIPT_DIR/models/GLM-5-GGUF/UD-IQ2_XXS"
-            echo "  $0 --cpp-dir ... --model-dir ... --api-key sk-xxx --lan"
+            echo "  $0 --cpp-dir ... --model-dir ... --no-lan   # 仅本机"
             exit 0
             ;;
         *)
@@ -142,8 +152,9 @@ echo -e "${GREEN}端口: $PORT${NC}"
 echo -e "${GREEN}监听: $HOST${NC}"
 echo -e "${GREEN}CPP_DIR: $CPP_DIR${NC}"
 echo -e "${GREEN}MODEL_DIR: $MODEL_DIR${NC}"
+echo -e "${GREEN}监控: /metrics 已启用${NC}"
 if [ -n "$API_KEY" ] || [ -n "$API_KEY_FILE" ]; then
-    echo -e "${GREEN}认证: 已启用 (API Key)${NC}"
+    echo -e "${GREEN}认证: 已启用 ($([ -n "$API_KEY" ] && echo "API Key" || echo "$API_KEY_FILE"))${NC}"
 else
     echo -e "${YELLOW}认证: 未启用${NC}"
 fi
@@ -173,6 +184,7 @@ LLAMA_ARGS=(
     --host "$HOST"
     --port "$PORT"
     --jinja
+    --metrics
 )
 if [ -n "$API_KEY" ]; then
     LLAMA_ARGS+=(--api-key "$API_KEY")
@@ -239,4 +251,19 @@ echo ""
 echo -e "${GREEN}常用命令:${NC}"
 echo "   查看日志: tail -f $LOG_FILE"
 echo "   停止服务: pkill -f llama-server"
+echo ""
+echo -e "${GREEN}监控接口 (需认证时加 -H 'Authorization: Bearer <key>'):${NC}"
+if [ -n "$HEALTH_API_KEY" ]; then
+    echo "   健康检查: curl -s -H 'Authorization: Bearer <key>' http://localhost:$PORT/health"
+    echo "   推理指标: curl -s -H 'Authorization: Bearer <key>' http://localhost:$PORT/metrics"
+    echo "   槽位状态: curl -s -H 'Authorization: Bearer <key>' http://localhost:$PORT/slots"
+else
+    echo "   健康检查: curl -s http://localhost:$PORT/health"
+    echo "   推理指标: curl -s http://localhost:$PORT/metrics"
+    echo "   槽位状态: curl -s http://localhost:$PORT/slots"
+fi
+echo ""
+echo -e "${YELLOW}硬件监控 (Apple Silicon):${NC}"
+echo "   asitop:  pip install asitop && sudo asitop   # GPU/CPU/内存/功耗"
+echo "   macmon:  brew install macmon && macmon       # 无需 sudo"
 echo ""
