@@ -1,0 +1,39 @@
+{
+  "glm-5": {
+    "repo_id": "unsloth/GLM-5-GGUF",
+    "default_quant": "UD-IQ2_XXS",
+    "quants": {
+      "UD-IQ2_XXS": { "pattern": "*UD-IQ2_XXS*", "size_gb": 241 },
+      "UD-TQ1_0": { "pattern": "*UD-TQ1_0*", "size_gb": 176 }
+    },
+    "alias": "unsloth/GLM-5",
+    "default_port": 8001,
+    "params": {
+      "temp": 1.0,
+      "top_p": 0.95,
+      "ctx_size": 202752,
+      "n_predict": 131072,
+      "repeat_penalty": 1.0,
+      "extra_args": ["--jinja", "--reasoning-budget", "-1"]
+    }
+  },
+  "qwen3.5": {
+    "repo_id": "unsloth/Qwen3.5-397B-A17B-GGUF",
+    "default_quant": "MXFP4_MOE",
+    "quants": {
+      "MXFP4_MOE": { "pattern": "*MXFP4_MOE*", "size_gb": 214 },
+      "UD-Q4_K_XL": { "pattern": "*UD-Q4_K_XL*", "size_gb": 214 },
+      "UD-Q2_K_XL": { "pattern": "*UD-Q2_K_XL*", "size_gb": 120 }
+    },
+    "alias": "unsloth/Qwen3.5-397B-A17B",
+    "default_port": 8002,
+    "params": {
+      "temp": 0.6,
+      "top_p": 0.95,
+      "ctx_size": 16384,
+      "n_predict": 32768,
+      "repeat_penalty": 1.0,
+      "extra_args": ["--jinja", "--reasoning-budget", "-1"]
+    }
+  }
+}

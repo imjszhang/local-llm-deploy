@@ -1,83 +1,53 @@
-# GLM-5 部署指南
+# Local LLM Deploy — 部署指南
 
-本文档包含 GLM-5 模型通过 llama.cpp 的完整部署流程。GLM-5 为纯文本 LLM，直接使用 llama-server 提供 OpenAI 兼容 API。
-
----
-
-## 必须修改的配置
-
-在开始部署之前，请确认以下路径配置：
-
-| 变量 | 说明 | 示例值 |
-|------|------|--------|
-| `CPP_DIR` | llama.cpp 编译后的根目录 | `/path/to/glm-5-deploy/llama.cpp` |
-| `MODEL_DIR` | GGUF 模型目录（含分片文件） | `/path/to/glm-5-deploy/models/GLM-5-GGUF/UD-IQ2_XXS` |
+本文档包含通过 llama.cpp 部署本地 LLM 模型的完整流程。支持多模型管理，通过 `models.json` 配置注册模型，通过 `manage.sh` 统一管理。
 
 ---
 
 ## 目录结构
 
-### 本部署包（已包含）
 ```
-./
-├── deploy.sh              # 一键部署脚本
-├── DEPLOY.md              # 本文档
-├── download_models.sh     # 模型下载脚本
+local-llm-deploy/
+├── manage.sh              # 统一管理入口
+├── models.json            # 模型注册配置
+├── deploy.sh              # 通用部署脚本
+├── download.sh            # 通用下载脚本
+├── serve-ui.py            # 前端 + 多模型 API 代理
+├── serve-ui.sh            # 前端启动器
+├── setup_llamacpp.sh      # llama.cpp 编译脚本
+├── init_llamacpp.sh       # llama.cpp 克隆脚本
+├── monitor.sh             # 命令行监控
 ├── requirements.txt       # Python 依赖
-├── .venv/                 # Python 虚拟环境（需创建）
+├── static/
+│   ├── index.html         # 入口页
+│   └── monitor.html       # 监控面板（多模型切换）
 ├── docs/
 │   └── architecture.md    # 架构说明
-├── llama.cpp/             # 需 clone 并编译
-└── models/                # 模型目录（需下载）
-```
-
-### 用户需要准备
-```
-<CPP_DIR>/
-└── build/bin/llama-server   # 编译后的 C++ 服务端
-
-<MODEL_DIR>/
-└── GLM-5-UD-IQ2_XXS-00001-of-00006.gguf   # 分片文件（llama-server 自动加载同目录所有分片）
+├── run/                   # PID 文件（自动创建）
+├── logs/                  # 日志文件（自动创建）
+├── models/                # 模型目录（需下载）
+└── llama.cpp/             # 推理引擎（需克隆编译）
 ```
 
 ---
 
 ## 一、前置条件
 
-### 1. 编译 C++ 推理服务
-
-GLM-5 需要 **官方 llama.cpp** 并应用 **PR 19460**。
-
-**方式一：使用脚本（推荐）**
+### 1. 编译 llama.cpp
 
 ```bash
-cd /path/to/glm-5-deploy
+# 克隆
+./init_llamacpp.sh
+
+# 编译
 ./setup_llamacpp.sh
-```
-
-**方式二：手动执行**
-
-```bash
-cd /path/to/glm-5-deploy/llama.cpp
-
-# 应用 PR 19460（GLM-5 支持，若获取失败可跳过，可能已合并）
-git fetch origin pull/19460/head:MASTER
-git checkout MASTER
-
-# 编译（macOS 自动启用 Metal 加速）
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target llama-server llama-cli -j
-
-# 验证
-ls -la build/bin/llama-server
 ```
 
 ### 2. 创建 Python 虚拟环境（用于模型下载）
 
 ```bash
-cd /path/to/glm-5-deploy
 python3 -m venv .venv
-source .venv/bin/activate   # macOS/Linux
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -86,186 +56,144 @@ pip install -r requirements.txt
 ## 二、模型下载
 
 ```bash
-cd /path/to/glm-5-deploy
+# 下载 GLM-5（默认 UD-IQ2_XXS，~241GB）
+./manage.sh download glm-5
 
-# 使用 .venv
-source .venv/bin/activate
+# 下载 Qwen3.5（默认 MXFP4_MOE，~214GB）
+./manage.sh download qwen3.5
 
-# 下载 2-bit 量化版（约 241GB，推荐 512GB Apple Studio）
-./download_models.sh
-
-# 或指定 1-bit 版本（约 176GB）
-QUANT=UD-TQ1_0 ./download_models.sh
+# 指定量化版本
+./manage.sh download glm-5 --quant UD-TQ1_0
+./manage.sh download qwen3.5 --quant UD-Q2_K_XL
 ```
 
 ---
 
 ## 三、服务部署
 
-### 1. 设置环境变量
+### 基本用法
 
 ```bash
-export CPP_DIR="/path/to/glm-5-deploy/llama.cpp"
-export MODEL_DIR="/path/to/glm-5-deploy/models/GLM-5-GGUF/UD-IQ2_XXS"
+# 启动单个模型
+./manage.sh start glm-5
+
+# 启动指定端口
+./manage.sh start qwen3.5 --port 8003
+
+# 启动指定量化版本
+./manage.sh start qwen3.5 --quant UD-Q2_K_XL
 ```
 
-### 2. 一键部署
+### 多模型同时运行
 
 ```bash
-./deploy.sh --cpp-dir "$CPP_DIR" --model-dir "$MODEL_DIR"
+./manage.sh start glm-5      # 端口 8001
+./manage.sh start qwen3.5    # 端口 8002
+./manage.sh status            # 查看所有实例
 ```
 
-### 2.1 认证与局域网访问（可选）
+> **注意**：同时运行多个大模型需要足够的内存。256GB Mac 通常只够运行一个大模型。
 
-启用 API Key 认证（推荐在局域网或公网暴露时使用）：
+### 认证
 
 ```bash
 # 单 Key 认证
-./deploy.sh --cpp-dir "$CPP_DIR" --model-dir "$MODEL_DIR" --api-key "sk-your-secret-key"
+./manage.sh start glm-5 --api-key "sk-your-secret-key"
 
 # 多 Key（密钥文件，每行一个）
-echo -e "sk-key-1\nsk-key-2" > api-keys.txt
-./deploy.sh --cpp-dir "$CPP_DIR" --model-dir "$MODEL_DIR" --api-key-file api-keys.txt
-
-# 认证 + 局域网访问
-./deploy.sh --cpp-dir "$CPP_DIR" --model-dir "$MODEL_DIR" --api-key "sk-xxx" --lan
+./manage.sh start glm-5 --api-key-file .api-key
 ```
 
-客户端需在请求头中携带：`Authorization: Bearer <你的API-Key>`。
-
-### 3. 手动启动
+### 高级用法（手动指定目录）
 
 ```bash
-# 找到第一个分片文件
-MODEL_FILE=$(ls "$MODEL_DIR"/*.gguf 2>/dev/null | head -1)
-
-"$CPP_DIR/build/bin/llama-server" \
-    --model "$MODEL_FILE" \
-    --alias "unsloth/GLM-5" \
-    --fit on \
-    --temp 1.0 \
-    --top-p 0.95 \
-    --ctx-size 16384 \
-    --port 8001 \
-    --jinja
-# 可选: --host 0.0.0.0 局域网访问, --api-key "sk-xxx" 或 --api-key-file PATH 认证
-```
-
-### 4. 后台运行
-
-```bash
-nohup "$CPP_DIR/build/bin/llama-server" \
-    --model "$MODEL_FILE" \
-    --alias "unsloth/GLM-5" \
-    --fit on \
-    --temp 1.0 \
-    --top-p 0.95 \
-    --ctx-size 16384 \
-    --port 8001 \
-    --jinja > /tmp/glm5_server.log 2>&1 &
-
-# 查看日志（模型加载需数分钟）
-tail -f /tmp/glm5_server.log
+./deploy.sh --model-dir ./models/custom-model/ --cpp-dir ./llama.cpp --port 8001
 ```
 
 ---
 
-## 四、验证服务
+## 四、前端与监控
 
 ```bash
-# 健康检查（无认证时）
-curl http://localhost:8001/health
+# 启动前端（自动代理到所有运行中的模型）
+./serve-ui.sh
 
-# 健康检查（启用认证时）
-curl -H "Authorization: Bearer sk-your-key" http://localhost:8001/health
+# 访问
+# 监控面板: http://localhost:8888/monitor.html
+# 支持在页面顶部下拉框切换监控不同模型
+```
 
-# OpenAI 兼容 API 测试（无认证）
-python3 -c "
-from openai import OpenAI
-client = OpenAI(base_url='http://127.0.0.1:8001/v1', api_key='sk-no-key-required')
-r = client.chat.completions.create(model='unsloth/GLM-5', messages=[{'role':'user','content':'Hello'}])
-print(r.choices[0].message.content)
-"
+### 命令行监控
 
-# OpenAI 兼容 API 测试（启用认证时，api_key 填你的实际 key）
-python3 -c "
-from openai import OpenAI
-client = OpenAI(base_url='http://127.0.0.1:8001/v1', api_key='sk-your-actual-key')
-r = client.chat.completions.create(model='unsloth/GLM-5', messages=[{'role':'user','content':'Hello'}])
-print(r.choices[0].message.content)
-"
+```bash
+./monitor.sh health                  # 默认端口 8001
+./monitor.sh metrics --model glm-5   # 指定模型
+./monitor.sh slots --model qwen3.5   # 指定模型
 ```
 
 ---
 
-## 五、硬件与部署建议（Apple Silicon）
+## 五、管理命令速查
 
-### 5.1 内存需求对照
-
-| 量化版本 | 磁盘/内存占用 | 256GB Mac | 512GB Apple Studio |
-|---------|----------------|-----------|---------------------|
-| UD-IQ2_XXS (2-bit) | ~241GB | 可装 | 推荐，富余 |
-| UD-TQ1_0 (1-bit) | ~176GB | 可装 | 推荐 |
-| 8-bit | ~805GB RAM | 不可 | 不可 |
-
-### 5.2 512GB Apple Studio 建议
-
-- **量化版本**：UD-IQ2_XXS (2-bit)，约 241GB
-- **结论**：512GB 统一内存大于 241GB，模型可完整载入内存，无需硬盘 offload，推理性能较好
-- **编译**：macOS 使用默认 Metal 加速，`cmake -B build -DCMAKE_BUILD_TYPE=Release` 即可
-- **启动参数**：`--fit on` 以充分利用 GPU/CPU
-
-*参考：Unsloth 文档建议 VRAM + RAM 总和接近或大于量化模型大小，否则需硬盘 offload，推理会变慢。*
-
----
-
-## 六、常用命令
-
-### 推理服务管理
 ```bash
-# 查看进程
-ps aux | grep llama-server
-
-# 停止服务
-pkill -f "llama-server"
-
-# 查看日志
-tail -f /tmp/glm5_server.log
+./manage.sh list          # 列出已注册模型
+./manage.sh status        # 运行中的实例
+./manage.sh start <name>  # 启动模型
+./manage.sh stop <name>   # 停止模型
+./manage.sh stop --all    # 停止全部
+./manage.sh logs <name>   # 查看日志
+./manage.sh download <name>  # 下载模型
 ```
 
-### 故障排查
+---
 
-| 问题 | 原因 | 解决方案 |
-|------|------|----------|
-| 模型加载超时 | 模型较大需数分钟 | 耐心等待，查看日志 |
-| 端口被占用 | 8001 已被使用 | 使用 --port 指定其他端口 |
-| 编译失败 | 缺少 PR 19460 | 确保 `git checkout MASTER` 已应用 |
+## 六、添加新模型
+
+编辑 `models.json` 添加新条目：
+
+```json
+{
+  "new-model": {
+    "repo_id": "unsloth/New-Model-GGUF",
+    "default_quant": "Q4_K_M",
+    "quants": {
+      "Q4_K_M": { "pattern": "*Q4_K_M*", "size_gb": 50 }
+    },
+    "alias": "unsloth/New-Model",
+    "default_port": 8003,
+    "params": {
+      "temp": 0.7, "top_p": 0.9, "ctx_size": 8192,
+      "n_predict": 4096, "repeat_penalty": 1.0,
+      "extra_args": ["--jinja"]
+    }
+  }
+}
+```
+
+然后：
+
+```bash
+./manage.sh download new-model
+./manage.sh start new-model
+```
 
 ---
 
-## 七、关键配置
+## 七、硬件建议（Apple Silicon）
 
-| 配置项 | GLM-5 值 |
-|--------|----------|
-| 默认端口 | 8001 |
-| 模型路径 | `models/GLM-5-GGUF/UD-IQ2_XXS/*.gguf` |
-| 推荐参数 | 按 Unsloth Default (Most Tasks) 见下表 |
-| 认证 | `--api-key KEY` 或 `--api-key-file PATH` |
-| 局域网访问 | `--host 0.0.0.0` 或 `--lan` |
+| 内存 | 推荐方案 |
+|------|----------|
+| 512GB Apple Studio | 同时运行 GLM-5 (241GB) + Qwen3.5 (214GB) |
+| 256GB Mac | 运行一个大模型：GLM-5 UD-IQ2_XXS 或 Qwen3.5 MXFP4_MOE |
+| 192GB | 小量化版本：GLM-5 UD-TQ1_0 (176GB) 或 Qwen3.5 UD-Q2_K_XL (120GB) |
 
-### Unsloth 推荐配置
+---
 
-| 场景 | temperature | top_p | max new tokens | repeat penalty |
-|------|-------------|-------|----------------|-----------------|
-| Default (Most Tasks) | 1.0 | 0.95 | 131072 | 1.0 (disabled) |
-| SWE Bench Verified | 0.7 | 1.0 | 16384 | 1.0 (disabled) |
+## 八、故障排查
 
-- 使用 `--jinja`
-- 最大上下文窗口：202752
-- 多轮 agent 任务（τ²-Bench、Terminal Bench 2）建议开启 Preserved Thinking 模式（`--reasoning-budget -1`）
-
-### 思考模式
-
-- **默认启用**：`--reasoning-budget -1`
-- **关闭**：`--reasoning-budget 0`，或单次请求传入 `"chat_template_kwargs": {"enable_thinking": false}`
-<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
+| 问题 | 解决方案 |
+|------|----------|
+| 模型加载超时 | 大模型需数分钟，查看日志 `./manage.sh logs <name>` |
+| 端口被占用 | 使用 `--port` 指定其他端口 |
+| 内存不足 | 选择更小的量化版本，或使用 `--quant` 参数 |
+| 编译失败 | 确保 `./setup_llamacpp.sh` 成功执行 |

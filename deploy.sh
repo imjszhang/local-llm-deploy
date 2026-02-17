@@ -1,6 +1,7 @@
 #!/bin/bash
-# GLM-5 一键部署脚本
+# Local LLM Deploy — 通用模型部署脚本
 # 启动 llama-server 提供 OpenAI 兼容 API
+# 支持通过 --model-name 从 models.json 读取配置，也支持手动指定参数
 
 set -e
 
@@ -11,26 +12,49 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CPP_DIR="${CPP_DIR:-}"
+MODELS_JSON="$SCRIPT_DIR/models.json"
+RUN_DIR="$SCRIPT_DIR/run"
+LOGS_DIR="$SCRIPT_DIR/logs"
+MODELS_DIR="$SCRIPT_DIR/models"
+
+mkdir -p "$RUN_DIR" "$LOGS_DIR"
+
+# 默认值
+CPP_DIR="${CPP_DIR:-$SCRIPT_DIR/llama.cpp}"
 MODEL_DIR="${MODEL_DIR:-}"
-PORT="${PORT:-8001}"
-LOG_FILE="${LOG_FILE:-/tmp/glm5_server.log}"
+MODEL_NAME="${MODEL_NAME:-}"
+QUANT=""
+PORT="${PORT:-}"
 API_KEY="${API_KEY:-}"
 API_KEY_FILE="${API_KEY_FILE:-}"
-# 默认开启局域网；若存在 .api-key 则默认使用
 HOST="${HOST:-0.0.0.0}"
+ALIAS=""
+TEMP=""
+TOP_P=""
+CTX_SIZE=""
+N_PREDICT=""
+REPEAT_PENALTY=""
+
 DEFAULT_API_KEY_FILE="$SCRIPT_DIR/.api-key"
 [ -z "$API_KEY" ] && [ -z "$API_KEY_FILE" ] && [ -f "$DEFAULT_API_KEY_FILE" ] && API_KEY_FILE="$DEFAULT_API_KEY_FILE"
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --model-name)
+            MODEL_NAME="$2"
+            shift 2
+            ;;
         --cpp-dir)
             CPP_DIR="$2"
             shift 2
             ;;
         --model-dir)
             MODEL_DIR="$2"
+            shift 2
+            ;;
+        --quant)
+            QUANT="$2"
             shift 2
             ;;
         --port)
@@ -60,23 +84,24 @@ while [[ $# -gt 0 ]]; do
         --help)
             echo "用法: $0 [选项]"
             echo ""
-            echo "必须参数:"
-            echo "  --cpp-dir PATH     llama.cpp 编译后的根目录 (或设置 CPP_DIR)"
-            echo "  --model-dir PATH  GGUF 模型目录，含分片文件 (或设置 MODEL_DIR)"
+            echo "模型选择（二选一）:"
+            echo "  --model-name NAME  从 models.json 读取配置（推荐）"
+            echo "  --model-dir PATH   手动指定 GGUF 模型目录"
             echo ""
             echo "可选参数:"
-            echo "  --port PORT        服务端口 (默认: 8001)"
-            echo "  --api-key KEY      API Key 认证，客户端需在 Authorization: Bearer <KEY> 中携带"
-            echo "  --api-key-file F   密钥文件路径，每行一个 key，支持多 key"
-            echo "  --host HOST        监听地址 (默认: 0.0.0.0 局域网)"
-            echo "  --lan              等同于 --host 0.0.0.0，允许局域网访问"
-            echo "  --no-lan           仅本机访问，等同于 --host 127.0.0.1"
-            echo ""
-            echo "默认行为: 局域网访问、启用 /metrics、若存在 .api-key 则启用认证"
+            echo "  --cpp-dir PATH     llama.cpp 编译目录 (默认: ./llama.cpp)"
+            echo "  --quant QUANT      量化版本，配合 --model-name 使用"
+            echo "  --port PORT        服务端口 (默认: 从 models.json 读取或 8001)"
+            echo "  --api-key KEY      API Key 认证"
+            echo "  --api-key-file F   密钥文件路径"
+            echo "  --host HOST        监听地址 (默认: 0.0.0.0)"
+            echo "  --lan              允许局域网访问"
+            echo "  --no-lan           仅本机访问"
             echo ""
             echo "示例:"
-            echo "  $0 --cpp-dir $SCRIPT_DIR/llama.cpp --model-dir $SCRIPT_DIR/models/GLM-5-GGUF/UD-IQ2_XXS"
-            echo "  $0 --cpp-dir ... --model-dir ... --no-lan   # 仅本机"
+            echo "  $0 --model-name glm-5"
+            echo "  $0 --model-name qwen3.5 --quant UD-Q2_K_XL --port 8003"
+            echo "  $0 --model-dir ./models/custom-model/  # 高级用法"
             exit 0
             ;;
         *)
@@ -87,7 +112,64 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 路径验证
+# ── 从 models.json 读取配置 ──
+
+EXTRA_ARGS=()
+
+if [ -n "$MODEL_NAME" ] && [ -f "$MODELS_JSON" ]; then
+    MODEL_CONFIG=$(python3 -c "
+import json, sys
+with open('$MODELS_JSON') as f:
+    data = json.load(f)
+model = data.get('$MODEL_NAME')
+if not model:
+    print('NOT_FOUND', file=sys.stderr)
+    sys.exit(1)
+quant = '${QUANT}' or model['default_quant']
+qinfo = model.get('quants', {}).get(quant, {})
+params = model.get('params', {})
+extra = ' '.join(params.get('extra_args', []))
+repo_name = model['repo_id'].replace('/', '-')
+print(f\"{model['repo_id']}|{model.get('alias', '')}|{model.get('default_port', 8001)}|{quant}|{params.get('temp', '')}|{params.get('top_p', '')}|{params.get('ctx_size', '')}|{params.get('n_predict', '')}|{params.get('repeat_penalty', '')}|{extra}|{repo_name}\")
+" 2>&1) || {
+        echo -e "${RED}错误: 模型 '$MODEL_NAME' 未在 models.json 中找到${NC}"
+        exit 1
+    }
+
+    IFS='|' read -r CFG_REPO_ID CFG_ALIAS CFG_PORT CFG_QUANT CFG_TEMP CFG_TOP_P CFG_CTX CFG_NPREDICT CFG_REPEAT CFG_EXTRA CFG_REPO_NAME <<< "$MODEL_CONFIG"
+
+    ALIAS="${ALIAS:-$CFG_ALIAS}"
+    PORT="${PORT:-$CFG_PORT}"
+    QUANT="${QUANT:-$CFG_QUANT}"
+    TEMP="${TEMP:-$CFG_TEMP}"
+    TOP_P="${TOP_P:-$CFG_TOP_P}"
+    CTX_SIZE="${CTX_SIZE:-$CFG_CTX}"
+    N_PREDICT="${N_PREDICT:-$CFG_NPREDICT}"
+    REPEAT_PENALTY="${REPEAT_PENALTY:-$CFG_REPEAT}"
+
+    if [ -n "$CFG_EXTRA" ]; then
+        read -ra EXTRA_ARGS <<< "$CFG_EXTRA"
+    fi
+
+    if [ -z "$MODEL_DIR" ]; then
+        MODEL_DIR="$MODELS_DIR/$CFG_REPO_NAME/$QUANT"
+    fi
+fi
+
+# 为手动指定 model-dir 的用户提供默认值
+PORT="${PORT:-8001}"
+ALIAS="${ALIAS:-custom-model}"
+TEMP="${TEMP:-1.0}"
+TOP_P="${TOP_P:-0.95}"
+CTX_SIZE="${CTX_SIZE:-16384}"
+N_PREDICT="${N_PREDICT:-32768}"
+REPEAT_PENALTY="${REPEAT_PENALTY:-1.0}"
+
+DISPLAY_NAME="${MODEL_NAME:-$ALIAS}"
+LOG_FILE="$LOGS_DIR/${MODEL_NAME:-custom}.log"
+
+# ── 路径验证 ──
+
 check_required_paths() {
     local has_error=false
 
@@ -105,14 +187,14 @@ check_required_paths() {
     fi
 
     if [ -z "$MODEL_DIR" ]; then
-        echo -e "${RED}错误: 必须指定 GGUF 模型目录${NC}"
-        echo "   使用 --model-dir 或设置 MODEL_DIR"
+        echo -e "${RED}错误: 必须指定模型（--model-name 或 --model-dir）${NC}"
         has_error=true
     elif [ ! -d "$MODEL_DIR" ]; then
         echo -e "${RED}错误: MODEL_DIR 不存在: $MODEL_DIR${NC}"
+        echo "   请先下载: ./manage.sh download $MODEL_NAME"
         has_error=true
     else
-        GGUF_COUNT=$(find "$MODEL_DIR" -maxdepth 1 -name "*.gguf" 2>/dev/null | wc -l)
+        GGUF_COUNT=$(find "$MODEL_DIR" -maxdepth 1 -name "*.gguf" 2>/dev/null | wc -l | tr -d ' ')
         if [ "$GGUF_COUNT" -eq 0 ]; then
             echo -e "${RED}错误: MODEL_DIR 中无 .gguf 文件: $MODEL_DIR${NC}"
             has_error=true
@@ -145,74 +227,85 @@ elif [ -n "$API_KEY_FILE" ]; then
 fi
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}   GLM-5 一键部署脚本${NC}"
+echo -e "${BLUE}   部署: $DISPLAY_NAME${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
-echo -e "${GREEN}端口: $PORT${NC}"
-echo -e "${GREEN}监听: $HOST${NC}"
+echo -e "${GREEN}模型:    $DISPLAY_NAME${NC}"
+echo -e "${GREEN}端口:    $PORT${NC}"
+echo -e "${GREEN}监听:    $HOST${NC}"
 echo -e "${GREEN}CPP_DIR: $CPP_DIR${NC}"
-echo -e "${GREEN}MODEL_DIR: $MODEL_DIR${NC}"
-echo -e "${GREEN}监控: /metrics 已启用${NC}"
+echo -e "${GREEN}MODEL:   $MODEL_DIR${NC}"
+echo -e "${GREEN}参数:    temp=$TEMP top_p=$TOP_P ctx=$CTX_SIZE n_predict=$N_PREDICT${NC}"
+echo -e "${GREEN}日志:    $LOG_FILE${NC}"
+echo -e "${GREEN}监控:    /metrics 已启用${NC}"
 if [ -n "$API_KEY" ] || [ -n "$API_KEY_FILE" ]; then
-    echo -e "${GREEN}认证: 已启用 ($([ -n "$API_KEY" ] && echo "API Key" || echo "$API_KEY_FILE"))${NC}"
+    echo -e "${GREEN}认证:    已启用 ($([ -n "$API_KEY" ] && echo "API Key" || echo "$API_KEY_FILE"))${NC}"
 else
-    echo -e "${YELLOW}认证: 未启用${NC}"
+    echo -e "${YELLOW}认证:    未启用${NC}"
 fi
 echo ""
 
-# 确定第一个分片 GGUF（必须按 00001-of-00006 顺序加载）
+# 确定第一个分片 GGUF
 MODEL_FILE=$(find "$MODEL_DIR" -maxdepth 1 -name "*.gguf" 2>/dev/null | sort | head -1)
 if [ -z "$MODEL_FILE" ]; then
     echo -e "${RED}错误: 未找到 GGUF 文件${NC}"
     exit 1
 fi
 
-# 停止已有服务（避免端口冲突）
-echo -e "${YELLOW}[1/3] 检查已有服务...${NC}"
-pkill -f "llama-server" 2>/dev/null || true
-sleep 3
+# 检查端口是否被占用
+echo -e "${YELLOW}[1/3] 检查端口...${NC}"
+if lsof -i :"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    EXISTING_PID=$(lsof -ti :"$PORT" -sTCP:LISTEN 2>/dev/null | head -1)
+    echo -e "${YELLOW}   端口 $PORT 已被占用 (PID $EXISTING_PID)，正在停止...${NC}"
+    kill "$EXISTING_PID" 2>/dev/null || true
+    sleep 3
+fi
 
 # 启动 llama-server
 echo -e "${YELLOW}[2/3] 启动 llama-server...${NC}"
-# Unsloth Default Settings (Most Tasks): temp=1.0, top_p=0.95, max_new_tokens=131072,
-# repeat_penalty=1.0(disabled), ctx=202752, --jinja. 思考模式默认启用。
-# 若内存不足可减小 --ctx-size（如 16384）。
 LLAMA_ARGS=(
     --model "$MODEL_FILE"
-    --alias "unsloth/GLM-5"
+    --alias "$ALIAS"
     --fit on
-    --temp 1.0
-    --top-p 0.95
-    --ctx-size 202752
-    --n-predict 131072
-    --repeat-penalty 1.0
+    --temp "$TEMP"
+    --top-p "$TOP_P"
+    --ctx-size "$CTX_SIZE"
+    --n-predict "$N_PREDICT"
+    --repeat-penalty "$REPEAT_PENALTY"
     --host "$HOST"
     --port "$PORT"
-    --jinja
     --metrics
     --slots
-    --reasoning-budget -1
     --threads-http 64
 )
-# 推理时 /metrics、/slots 会阻塞，扩大 HTTP 线程池避免耗尽后无法处理新请求（含 OpenAI 接口）
+
+# 追加 extra_args（如 --jinja、--reasoning-budget 等）
+if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
+    LLAMA_ARGS+=("${EXTRA_ARGS[@]}")
+fi
+
 if [ -n "$API_KEY" ]; then
     LLAMA_ARGS+=(--api-key "$API_KEY")
 elif [ -n "$API_KEY_FILE" ]; then
     LLAMA_ARGS+=(--api-key-file "$API_KEY_FILE")
 fi
-# 启用 slots_debug：/slots 端点将返回每个槽位的 prompt 和 generated 文本，
-# 供监控页实时查看生成内容。注意：这会暴露用户的输入和输出文本，
-# 仅建议在受信任网络中使用。
-# 使用 env 前缀确保子进程必定收到该变量（避免通过 systemd/其他方式启动时丢失）
+
 LLAMA_SERVER_SLOTS_DEBUG=1
 export LLAMA_SERVER_SLOTS_DEBUG
 
 nohup env LLAMA_SERVER_SLOTS_DEBUG=1 "$CPP_DIR/build/bin/llama-server" "${LLAMA_ARGS[@]}" > "$LOG_FILE" 2>&1 &
+SERVER_PID=$!
 
+# 写入 PID 文件（第一行 PID，第二行端口）
+PID_FILE_NAME="${MODEL_NAME:-custom}"
+echo "$SERVER_PID" > "$RUN_DIR/$PID_FILE_NAME.pid"
+echo "$PORT" >> "$RUN_DIR/$PID_FILE_NAME.pid"
+
+echo "   PID: $SERVER_PID"
 echo "   等待服务启动（模型加载需数分钟）..."
 sleep 30
 
-# 健康检查（curl 必须加超时，否则服务加载模型时可能无响应导致脚本卡死）
+# 健康检查
 echo -e "${YELLOW}[3/3] 健康检查...${NC}"
 MAX_RETRIES=12
 RETRY=0
@@ -241,56 +334,33 @@ fi
 
 echo ""
 echo -e "${BLUE}========================================${NC}"
-echo -e "${GREEN}部署完成${NC}"
+echo -e "${GREEN}部署完成: $DISPLAY_NAME${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 if [ "$HOST" = "0.0.0.0" ]; then
     LAN_IP=$(ifconfig 2>/dev/null | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}' | head -1)
-    echo -e "${GREEN}本机: http://localhost:$PORT${NC}"
-    [ -n "$LAN_IP" ] && echo -e "${GREEN}局域网: http://${LAN_IP}:$PORT${NC}"
+    echo -e "${GREEN}本机:     http://localhost:$PORT${NC}"
+    [ -n "$LAN_IP" ] && echo -e "${GREEN}局域网:   http://${LAN_IP}:$PORT${NC}"
 else
     echo -e "${GREEN}服务地址: http://${HOST}:$PORT${NC}"
 fi
-echo -e "${GREEN}聊天: http://localhost:$PORT/${NC}"
+echo -e "${GREEN}OpenAI:   http://localhost:$PORT/v1${NC}"
 echo ""
-echo -e "${YELLOW}前端（含监控）需单独启动，因 API Key 认证会拦截静态文件:${NC}"
+echo -e "${YELLOW}前端（含监控）需单独启动:${NC}"
 echo "   ./serve-ui.sh"
-echo "   然后访问: http://localhost:8888/ (聊天) 或 http://localhost:8888/monitor.html (监控)"
-echo -e "${GREEN}OpenAI API: http://localhost:$PORT/v1${NC}"
+echo "   然后访问: http://localhost:8888/monitor.html"
 if [ -n "$HEALTH_API_KEY" ]; then
     echo ""
     echo -e "${YELLOW}认证已启用，请求时需携带:${NC}"
     echo "   Authorization: Bearer <你的API-Key>"
-    echo ""
-    echo -e "${YELLOW}示例 (curl):${NC}"
-    echo "   curl -H 'Authorization: Bearer <key>' http://localhost:$PORT/v1/chat/completions ..."
-    echo ""
-    echo -e "${YELLOW}示例 (OpenAI Python):${NC}"
-    echo "   client = OpenAI(base_url='http://localhost:$PORT/v1', api_key='<你的API-Key>')"
 fi
 echo ""
-echo -e "${GREEN}常用命令:${NC}"
-echo "   查看日志: tail -f $LOG_FILE"
-echo "   停止服务: pkill -f llama-server"
-echo ""
-echo -e "${GREEN}监控接口 (需认证时加 -H 'Authorization: Bearer <key>'):${NC}"
-if [ -n "$HEALTH_API_KEY" ]; then
-    echo "   健康检查: curl -s -H 'Authorization: Bearer <key>' http://localhost:$PORT/health"
-    echo "   推理指标: curl -s -H 'Authorization: Bearer <key>' http://localhost:$PORT/metrics"
-    echo "   槽位状态: curl -s -H 'Authorization: Bearer <key>' http://localhost:$PORT/slots"
-    echo ""
-    echo -e "${YELLOW}slots_debug 已启用，监控页可显示生成内容。若仍提示需启用，请检查日志是否含 'slots debug = 1':${NC}"
-    echo "   tail -20 $LOG_FILE | grep -i slots"
-else
-    echo "   健康检查: curl -s http://localhost:$PORT/health"
-    echo "   推理指标: curl -s http://localhost:$PORT/metrics"
-    echo "   槽位状态: curl -s http://localhost:$PORT/slots"
-    echo ""
-    echo -e "${YELLOW}slots_debug 已启用，监控页可显示生成内容。若仍提示需启用，请检查日志是否含 'slots debug = 1':${NC}"
-    echo "   tail -20 $LOG_FILE | grep -i slots"
-fi
+echo -e "${GREEN}管理命令:${NC}"
+echo "   查看状态: ./manage.sh status"
+echo "   查看日志: ./manage.sh logs $PID_FILE_NAME"
+echo "   停止服务: ./manage.sh stop $PID_FILE_NAME"
 echo ""
 echo -e "${YELLOW}硬件监控 (Apple Silicon):${NC}"
-echo "   asitop:  pip install asitop && sudo asitop   # GPU/CPU/内存/功耗"
-echo "   macmon:  brew install macmon && macmon       # 无需 sudo"
+echo "   asitop:  pip install asitop && sudo asitop"
+echo "   macmon:  brew install macmon && macmon"
 echo ""

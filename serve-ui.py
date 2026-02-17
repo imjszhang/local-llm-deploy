@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-前端静态服务 + API 代理
-自动读取 .api-key 并代理请求到 llama-server，无需手动输入密钥
+Local LLM Deploy — 前端静态服务 + 多模型 API 代理
+自动读取 .api-key，支持多个 llama-server 后端实例的路由代理
+
+路由规则:
+  /api/models            → 返回运行中的模型列表（从 run/*.pid 读取）
+  /api/<model-name>/*    → 代理到该模型对应的后端端口
+  /api/*                 → 代理到默认（第一个运行中的）后端
 """
+import json
 import os
 import socket
 import sys
@@ -14,10 +20,8 @@ from socketserver import ThreadingMixIn
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(SCRIPT_DIR, "static")
 API_KEY_FILE = os.path.join(SCRIPT_DIR, ".api-key")
-LLAMA_BASE = os.environ.get("LLAMA_API_BASE", "http://127.0.0.1:8001")
-# 大 prompt + thinking 场景：7k prompt~281s，生成 8.31 tok/s，20k prompt+10k 生成约 35min
+RUN_DIR = os.path.join(SCRIPT_DIR, "run")
 API_PROXY_TIMEOUT = int(os.environ.get("API_PROXY_TIMEOUT", "3600"))
-# 监控接口超时：llama-server 推理时 /metrics /slots 会阻塞，短超时快速释放线程避免服务卡死
 MONITOR_PROXY_TIMEOUT = int(os.environ.get("MONITOR_PROXY_TIMEOUT", "8"))
 
 
@@ -26,6 +30,42 @@ def load_api_key():
         with open(API_KEY_FILE, "r") as f:
             return f.readline().strip().strip("\r\n") or None
     return None
+
+
+def get_running_models():
+    """从 run/*.pid 读取运行中的模型列表，返回 {name: {pid, port}}"""
+    models = {}
+    if not os.path.isdir(RUN_DIR):
+        return models
+    for fname in os.listdir(RUN_DIR):
+        if not fname.endswith(".pid"):
+            continue
+        fpath = os.path.join(RUN_DIR, fname)
+        try:
+            with open(fpath) as f:
+                lines = f.read().strip().split("\n")
+            pid = int(lines[0].strip())
+            port = int(lines[1].strip()) if len(lines) > 1 else 8001
+            # 检查进程是否还在运行
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                os.remove(fpath)
+                continue
+            name = fname[:-4]  # strip .pid
+            models[name] = {"pid": pid, "port": port}
+        except (ValueError, IndexError, FileNotFoundError):
+            continue
+    return models
+
+
+def get_default_port():
+    """获取默认后端端口（第一个运行中的模型，或 8001）"""
+    models = get_running_models()
+    if models:
+        first = next(iter(models.values()))
+        return first["port"]
+    return int(os.environ.get("LLAMA_PORT", "8001"))
 
 
 class ProxyHandler(SimpleHTTPRequestHandler):
@@ -49,19 +89,40 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         else:
             super().do_POST()
 
+    def resolve_backend(self, api_path):
+        """解析 API 路径，返回 (backend_url, remaining_path)"""
+        # /api/models → 特殊端点，返回模型列表
+        if api_path.lstrip("/") == "models":
+            return None, "models"
+
+        # /api/<model-name>/... → 路由到指定模型
+        models = get_running_models()
+        parts = api_path.lstrip("/").split("/", 1)
+        if len(parts) >= 1 and parts[0] in models:
+            model_name = parts[0]
+            port = models[model_name]["port"]
+            remaining = "/" + parts[1] if len(parts) > 1 else "/"
+            return f"http://127.0.0.1:{port}", remaining
+
+        # /api/... → 默认后端
+        port = get_default_port()
+        return f"http://127.0.0.1:{port}", api_path
+
     def proxy_request(self, method):
-        path = self.path[4:]  # strip /api
-        url = LLAMA_BASE.rstrip("/") + path
-        # 监控接口推理时易阻塞，使用短超时
+        api_path = self.path[4:]  # strip /api
+
+        backend_url, remaining_path = self.resolve_backend(api_path)
+
+        # 特殊端点: /api/models
+        if backend_url is None and remaining_path == "models":
+            self.handle_models_endpoint()
+            return
+
+        url = backend_url.rstrip("/") + remaining_path
+
         monitor_paths = ("health", "metrics", "slots")
-        timeout = MONITOR_PROXY_TIMEOUT if path.lstrip("/").split("?")[0] in monitor_paths else API_PROXY_TIMEOUT
-        if self.raw_requestline and b"?" in self.raw_requestline:
-            # preserve query string
-            pass
-        else:
-            # parse query from path
-            if "?" in path:
-                url = LLAMA_BASE.rstrip("/") + path
+        clean_path = remaining_path.lstrip("/").split("?")[0]
+        timeout = MONITOR_PROXY_TIMEOUT if clean_path in monitor_paths else API_PROXY_TIMEOUT
 
         headers = {}
         for k, v in self.headers.items():
@@ -114,6 +175,19 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error(502, str(e))
 
+    def handle_models_endpoint(self):
+        """返回运行中的模型列表"""
+        models = get_running_models()
+        result = []
+        for name, info in models.items():
+            result.append({"name": name, "port": info["port"], "pid": info["pid"]})
+        body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, format, *args):
         if not self.path.startswith("/api/"):
             super().log_message(format, *args)
@@ -122,9 +196,22 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 def main():
     port = int(os.environ.get("UI_PORT", "8888"))
     api_key = load_api_key()
+    models = get_running_models()
+
     print(f"前端服务: http://localhost:{port}/")
     print(f"  监控: http://localhost:{port}/monitor.html")
-    print(f"API 代理: /api/* -> {LLAMA_BASE}")
+    print()
+    print("API 代理路由:")
+    print(f"  /api/models → 模型列表")
+    if models:
+        for name, info in models.items():
+            print(f"  /api/{name}/* → http://127.0.0.1:{info['port']}")
+        first_name = next(iter(models))
+        print(f"  /api/* → http://127.0.0.1:{models[first_name]['port']} (默认: {first_name})")
+    else:
+        default_port = int(os.environ.get("LLAMA_PORT", "8001"))
+        print(f"  /api/* → http://127.0.0.1:{default_port} (无运行中模型，使用默认端口)")
+    print()
     if api_key:
         print("  认证: 已从 .api-key 加载")
     else:

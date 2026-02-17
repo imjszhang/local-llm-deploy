@@ -16,6 +16,10 @@ api-keys.txt
 *.key
 *.pem
 
+# 运行时
+run/
+logs/
+
 # 其他
 archives/
 *.log

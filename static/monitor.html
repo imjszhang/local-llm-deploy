@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>GLM-5 监控</title>
+    <title>LLM 监控</title>
     <style>
         :root { --bg: #0f0f12; --card: #1a1a1f; --text: #e4e4e7; --muted: #71717a; --accent: #22c55e; --warn: #eab308; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -16,10 +16,13 @@
         .status { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%; margin-right: 0.5rem; }
         .status.ok { background: var(--accent); }
         .status.err { background: #ef4444; }
-        .api-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
-        .api-row input { flex: 1; padding: 0.5rem; border-radius: 0.25rem; border: 1px solid #27272a; background: var(--card); color: var(--text); }
-        .api-row button { padding: 0.5rem 1rem; border-radius: 0.25rem; border: none; background: var(--accent); color: #000; cursor: pointer; font-weight: 500; }
-        .api-row button:hover { opacity: 0.9; }
+        .config-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+        .config-row select, .config-row input { padding: 0.5rem; border-radius: 0.25rem; border: 1px solid #27272a; background: var(--card); color: var(--text); }
+        .config-row select { min-width: 160px; }
+        .config-row input { flex: 1; min-width: 200px; }
+        .config-row button { padding: 0.5rem 1rem; border-radius: 0.25rem; border: none; background: var(--accent); color: #000; cursor: pointer; font-weight: 500; white-space: nowrap; }
+        .config-row button:hover { opacity: 0.9; }
+        .config-row button.secondary { background: var(--muted); }
         .nav { margin-bottom: 1rem; }
         .nav a { color: var(--muted); text-decoration: none; margin-right: 1rem; }
         .nav a:hover { color: var(--text); }
@@ -35,19 +38,23 @@
         .slot-muted { color: var(--muted); }
         .error { color: #ef4444; font-size: 0.875rem; }
         .refresh { color: var(--muted); font-size: 0.75rem; margin-top: 0.5rem; }
+        .model-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem; background: #27272a; color: var(--accent); font-size: 0.75rem; font-family: ui-monospace, monospace; margin-left: 0.5rem; }
     </style>
 </head>
 <body>
-    <h1>GLM-5 监控</h1>
+    <h1>LLM 监控 <span class="model-badge" id="currentModelBadge">-</span></h1>
 
     <div class="card">
         <h2>配置</h2>
-        <div class="api-row">
-            <input type="text" id="apiBase" placeholder="默认 /api 使用代理（自动读取 .api-key）">
-            <button onclick="localStorage.setItem('glm5_api_base', document.getElementById('apiBase').value.trim() || '/api'); fetchAll()">保存</button>
-            <button onclick="localStorage.removeItem('glm5_api_base'); location.reload()" style="background:var(--muted)">清除缓存</button>
+        <div class="config-row">
+            <select id="modelSelect">
+                <option value="">加载中...</option>
+            </select>
+            <input type="text" id="apiBase" placeholder="API 地址（留空使用代理）" style="display:none">
+            <button onclick="saveConfig()">刷新</button>
+            <button class="secondary" onclick="resetConfig()">重置</button>
         </div>
-        <p class="refresh">默认 /api 经本服务代理，自动认证。推理时 /metrics、/slots 会阻塞，轮询已降频（12s）以避免服务卡死，超时后会提示「推理中」。</p>
+        <p class="refresh">选择模型后自动通过代理路由。推理时 /metrics、/slots 会阻塞，轮询已降频以避免服务卡死。</p>
     </div>
 
     <div class="card">
@@ -74,7 +81,6 @@
         function escapeHtml(str) {
             return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         }
-        // 从生成文本中解析 <think>...</think> 思考内容
         function parseThinkingAndContent(gen) {
             const thinkMatch = gen.match(/<think>([\s\S]*?)(?:<\/think>|$)/);
             const thinking = thinkMatch ? thinkMatch[1].trim() : '';
@@ -85,12 +91,81 @@
 
         let hasProcessing = false;
         let pollTimer = null;
-        const POLL_FAST = 12000;   // 推理时 12s 轮询（/metrics、/slots 会阻塞主循环，过于频繁会导致服务卡死）
-        const POLL_IDLE = 10000;  // 空闲时 10s 刷新
+        let currentModel = localStorage.getItem('llm_current_model') || '';
+        let modelsLoaded = false;
+        const POLL_FAST = 12000;
+        const POLL_IDLE = 10000;
 
         function headers() {
             return { 'Accept': 'application/json, text/plain' };
         }
+
+        // 加载运行中的模型列表
+        async function loadModels() {
+            const select = document.getElementById('modelSelect');
+            try {
+                const origin = window.location.origin || 'http://localhost:8888';
+                const resp = await fetch(origin + '/api/models', { headers: headers() });
+                if (resp.ok) {
+                    const models = await resp.json();
+                    select.innerHTML = '';
+                    if (models.length === 0) {
+                        select.innerHTML = '<option value="">无运行中的模型</option>';
+                        currentModel = '';
+                    } else {
+                        models.forEach(m => {
+                            const opt = document.createElement('option');
+                            opt.value = m.name;
+                            opt.textContent = `${m.name} (:${m.port})`;
+                            select.appendChild(opt);
+                        });
+                        if (currentModel && models.some(m => m.name === currentModel)) {
+                            select.value = currentModel;
+                        } else {
+                            currentModel = models[0].name;
+                            select.value = currentModel;
+                        }
+                    }
+                    modelsLoaded = true;
+                }
+            } catch (e) {
+                select.innerHTML = '<option value="">连接失败</option>';
+            }
+            updateModelBadge();
+        }
+
+        function updateModelBadge() {
+            document.getElementById('currentModelBadge').textContent = currentModel || '-';
+        }
+
+        function apiUrl(path) {
+            const origin = window.location.origin || 'http://localhost:8888';
+            if (currentModel) {
+                return origin + '/api/' + currentModel + path;
+            }
+            return origin + '/api' + path;
+        }
+
+        function saveConfig() {
+            const select = document.getElementById('modelSelect');
+            currentModel = select.value;
+            localStorage.setItem('llm_current_model', currentModel);
+            updateModelBadge();
+            fetchAll();
+        }
+
+        function resetConfig() {
+            localStorage.removeItem('llm_current_model');
+            currentModel = '';
+            loadModels().then(() => fetchAll());
+        }
+
+        document.getElementById('modelSelect').addEventListener('change', function() {
+            currentModel = this.value;
+            localStorage.setItem('llm_current_model', currentModel);
+            updateModelBadge();
+            fetchAll();
+        });
 
         function parseMetrics(text) {
             const m = {};
@@ -117,19 +192,7 @@
             'llamacpp:n_tokens_max': '最大上下文',
         };
 
-        function apiUrl(path) {
-            let base = localStorage.getItem('glm5_api_base') || '/api';
-            if (base.includes('8001') || base.includes(':8001')) {
-                base = '/api';
-                localStorage.setItem('glm5_api_base', base);
-            }
-            if (base.startsWith('http')) return base.replace(/\/$/, '') + path;
-            const origin = window.location.origin || 'http://localhost:8888';
-            return origin + (base.startsWith('/') ? base : '/' + base) + path;
-        }
-
-        // 推理时 llama-server 的 /metrics /slots 会阻塞，短超时快速释放线程，代理层 8s 超时
-        const MONITOR_TIMEOUT_MS = 10000;  // 10s，略大于代理超时
+        const MONITOR_TIMEOUT_MS = 10000;
         const BLOCKED_HINT = '推理中，监控接口被阻塞，请稍后刷新';
         function fetchWithTimeout(url, opts, ms = MONITOR_TIMEOUT_MS) {
             const ctrl = new AbortController();
@@ -147,27 +210,23 @@
 
         let firstLoad = true;
         async function fetchAll() {
-            const scrollY = window.scrollY;
-            const base = localStorage.getItem('glm5_api_base') || '/api';
-            if (base.includes('8001') || base.includes(':8001')) {
-                localStorage.setItem('glm5_api_base', '/api');
+            if (!modelsLoaded) {
+                await loadModels();
             }
-            document.getElementById('apiBase').value = base.includes('8001') ? '/api' : base;
 
-            // 局部刷新：不整体清空，仅首屏显示加载
+            const scrollY = window.scrollY;
+
             if (firstLoad) {
                 document.getElementById('metrics').innerHTML = '<div class="metric slot-muted">加载中...</div>';
                 document.getElementById('slots').innerHTML = '<div class="metric slot-muted">加载中...</div>';
             }
 
-            // 独立请求：单个端点失败不影响其他，只更新成功的部分
             const [healthResult, metricsResult, slotsResult] = await Promise.allSettled([
                 fetchWithTimeout(apiUrl('/health'), { headers: headers() }),
                 fetchWithTimeout(apiUrl('/metrics'), { headers: headers() }),
                 fetchWithTimeout(apiUrl('/slots'), { headers: headers() })
             ]);
 
-            // 健康状态
             if (healthResult.status === 'fulfilled') {
                 const healthRes = healthResult.value;
                 document.getElementById('healthDot').className = 'status ' + (healthRes.ok ? 'ok' : 'err');
@@ -177,7 +236,6 @@
                 document.getElementById('healthText').textContent = errMsg(healthResult.reason);
             }
 
-            // 推理指标：仅在有结果时更新，失败则保留原内容
             if (metricsResult.status === 'fulfilled') {
                 const metricsRes = metricsResult.value;
                 if (metricsRes.ok) {
@@ -192,9 +250,7 @@
                     document.getElementById('metrics').innerHTML = `<div class="error">${msg}</div>`;
                 }
             }
-            // metrics 失败时不覆盖，保留原内容
 
-            // 槽位状态：仅在有结果时更新
             if (slotsResult.status === 'fulfilled') {
                 const slotsRes = slotsResult.value;
                 if (slotsRes.ok) {
@@ -248,17 +304,11 @@
                     document.getElementById('slots').innerHTML = `<div class="error">${msg}</div>`;
                 }
             }
-            // slots 失败时不覆盖，保留原内容
 
             document.getElementById('lastUpdate').textContent = `上次更新: ${new Date().toLocaleTimeString('zh-CN')}`;
-
-            // 自动滚动生成内容区和思考区到底部
             document.querySelectorAll('.slot-generated, .slot-thinking').forEach(el => { el.scrollTop = el.scrollHeight; });
-
             requestAnimationFrame(() => window.scrollTo(0, scrollY));
             firstLoad = false;
-
-            // 有推理时 2s 更新槽位，空闲时 10s 刷新
             schedulePoll();
         }
 
@@ -275,6 +325,9 @@
                 fetchAll();
             }
         });
+
+        // 每 30s 刷新一次模型列表（发现新模型或模型停止）
+        setInterval(() => { loadModels(); }, 30000);
 
         fetchAll();
     </script>

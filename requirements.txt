@@ -1,4 +1,4 @@
-# GLM-5 部署项目 Python 依赖
+# Local LLM Deploy — Python 依赖
 # 用于模型下载和 OpenAI API 测试
 
 huggingface_hub>=0.20.0
