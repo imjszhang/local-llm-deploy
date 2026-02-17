@@ -144,10 +144,13 @@ get_running_pid() {
 # 模型的 GGUF 目录路径
 get_model_dir() {
     local model="$1" quant="$2"
-    local repo_id
-    repo_id=$(json_model_field "$model" "repo_id") || return 1
     local repo_name
-    repo_name=$(echo "$repo_id" | tr '/' '-')
+    repo_name=$(json_model_field "$model" "repo_name" 2>/dev/null) || true
+    if [ -z "$repo_name" ]; then
+        local repo_id
+        repo_id=$(json_model_field "$model" "repo_id") || return 1
+        repo_name=$(echo "$repo_id" | tr '/' '-')
+    fi
     echo "$MODELS_DIR/$repo_name/$quant"
 }
 

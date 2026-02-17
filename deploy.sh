@@ -129,7 +129,7 @@ quant = '${QUANT}' or model['default_quant']
 qinfo = model.get('quants', {}).get(quant, {})
 params = model.get('params', {})
 extra = ' '.join(params.get('extra_args', []))
-repo_name = model['repo_id'].replace('/', '-')
+repo_name = model.get('repo_name') or model['repo_id'].replace('/', '-')
 print(f\"{model['repo_id']}|{model.get('alias', '')}|{model.get('default_port', 8001)}|{quant}|{params.get('temp', '')}|{params.get('top_p', '')}|{params.get('ctx_size', '')}|{params.get('n_predict', '')}|{params.get('repeat_penalty', '')}|{extra}|{repo_name}\")
 " 2>&1) || {
         echo -e "${RED}错误: 模型 '$MODEL_NAME' 未在 models.json 中找到${NC}"
@@ -292,14 +292,18 @@ fi
 
 LLAMA_SERVER_SLOTS_DEBUG=1
 export LLAMA_SERVER_SLOTS_DEBUG
+# macOS: 确保动态库路径正确（项目迁移后 @rpath 可能指向旧路径）
+LLAMA_BIN_DIR="$CPP_DIR/build/bin"
+export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:+$DYLD_LIBRARY_PATH:}$LLAMA_BIN_DIR"
 
-nohup env LLAMA_SERVER_SLOTS_DEBUG=1 "$CPP_DIR/build/bin/llama-server" "${LLAMA_ARGS[@]}" > "$LOG_FILE" 2>&1 &
+nohup env LLAMA_SERVER_SLOTS_DEBUG=1 DYLD_LIBRARY_PATH="$LLAMA_BIN_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" "$CPP_DIR/build/bin/llama-server" "${LLAMA_ARGS[@]}" > "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 
-# 写入 PID 文件（第一行 PID，第二行端口）
+# 写入 PID 文件（第一行 PID，第二行端口，第三行 alias/模型名）
 PID_FILE_NAME="${MODEL_NAME:-custom}"
 echo "$SERVER_PID" > "$RUN_DIR/$PID_FILE_NAME.pid"
 echo "$PORT" >> "$RUN_DIR/$PID_FILE_NAME.pid"
+echo "${ALIAS:-$MODEL_NAME}" >> "$RUN_DIR/$PID_FILE_NAME.pid"
 
 echo "   PID: $SERVER_PID"
 echo "   等待服务启动（模型加载需数分钟）..."

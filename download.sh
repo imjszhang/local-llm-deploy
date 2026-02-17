@@ -44,7 +44,7 @@ for name, cfg in data.items():
 fi
 
 # 从 models.json 读取配置
-read -r REPO_ID DEFAULT_QUANT PATTERN <<< "$(python3 -c "
+read -r REPO_ID DEFAULT_QUANT PATTERN REPO_NAME <<< "$(python3 -c "
 import json, sys
 with open('$MODELS_JSON') as f:
     data = json.load(f)
@@ -57,7 +57,8 @@ q = model.get('quants', {}).get(quant)
 if not q:
     print(f'可用量化版本: {list(model[\"quants\"].keys())}', file=sys.stderr)
     sys.exit(1)
-print(model['repo_id'], quant, q['pattern'])
+repo_name = model.get('repo_name') or model['repo_id'].replace('/', '-')
+print(model['repo_id'], quant, q['pattern'], repo_name)
 " 2>&1)" || {
     echo -e "\033[0;31m错误: 未知模型 '$MODEL_NAME' 或量化版本 '${QUANT}'\033[0m"
     exit 1
@@ -69,7 +70,7 @@ if [ "$REPO_ID" = "ERROR" ]; then
 fi
 
 QUANT="${QUANT:-$DEFAULT_QUANT}"
-REPO_NAME=$(echo "$REPO_ID" | tr '/' '-')
+REPO_NAME="${REPO_NAME:-$(echo "$REPO_ID" | tr '/' '-')}"
 TARGET_DIR="$MODELS_DIR/$REPO_NAME/$QUANT"
 
 # 使用项目 .venv 中的 Python（若存在）

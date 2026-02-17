@@ -1,6 +1,7 @@
 {
   "glm-5": {
     "repo_id": "unsloth/GLM-5-GGUF",
+    "repo_name": "GLM-5-GGUF",
     "default_quant": "UD-IQ2_XXS",
     "quants": {
       "UD-IQ2_XXS": { "pattern": "*UD-IQ2_XXS*", "size_gb": 241 },

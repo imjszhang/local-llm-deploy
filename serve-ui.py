@@ -33,7 +33,7 @@ def load_api_key():
 
 
 def get_running_models():
-    """从 run/*.pid 读取运行中的模型列表，返回 {name: {pid, port}}"""
+    """从 run/*.pid 读取运行中的模型列表，返回 {name: {pid, port, model}}"""
     models = {}
     if not os.path.isdir(RUN_DIR):
         return models
@@ -46,14 +46,18 @@ def get_running_models():
                 lines = f.read().strip().split("\n")
             pid = int(lines[0].strip())
             port = int(lines[1].strip()) if len(lines) > 1 else 8001
+            name = fname[:-4]  # strip .pid
+            # 第三行为 OpenAI 接口使用的模型名（alias，如 unsloth/GLM-5）
+            model = lines[2].strip() if len(lines) > 2 else name
+            if not model:
+                model = name
             # 检查进程是否还在运行
             try:
                 os.kill(pid, 0)
             except OSError:
                 os.remove(fpath)
                 continue
-            name = fname[:-4]  # strip .pid
-            models[name] = {"pid": pid, "port": port}
+            models[name] = {"pid": pid, "port": port, "model": model}
         except (ValueError, IndexError, FileNotFoundError):
             continue
     return models
@@ -176,11 +180,16 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.send_error(502, str(e))
 
     def handle_models_endpoint(self):
-        """返回运行中的模型列表"""
+        """返回运行中的模型列表，model 为 OpenAI 接口调用时使用的模型名"""
         models = get_running_models()
         result = []
         for name, info in models.items():
-            result.append({"name": name, "port": info["port"], "pid": info["pid"]})
+            result.append({
+                "name": name,
+                "model": info.get("model", name),
+                "port": info["port"],
+                "pid": info["pid"],
+            })
         body = json.dumps(result, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

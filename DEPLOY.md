@@ -110,6 +110,19 @@ pip install -r requirements.txt
 ./deploy.sh --model-dir ./models/custom-model/ --cpp-dir ./llama.cpp --port 8001
 ```
 
+### OpenAI 接口调用
+
+外部通过 OpenAI 兼容 API 调用时，请求体中的 `model` 字段应使用 `alias`（如 `unsloth/GLM-5`），而非内部名称（如 `glm-5`）：
+
+```bash
+# 示例：curl 调用 chat completions
+curl -X POST http://localhost:8888/api/glm-5/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "unsloth/GLM-5", "messages": [{"role": "user", "content": "你好"}]}'
+```
+
+`/api/models` 会返回每个实例的 `model` 字段，即应使用的模型名。
+
 ---
 
 ## 四、前端与监控

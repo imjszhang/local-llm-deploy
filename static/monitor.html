@@ -116,7 +116,8 @@
                         models.forEach(m => {
                             const opt = document.createElement('option');
                             opt.value = m.name;
-                            opt.textContent = `${m.name} (:${m.port})`;
+                            opt.textContent = `${m.model || m.name} (:${m.port})`;
+                            opt.title = `路由: /api/${m.name}/*  请求体 model: ${m.model || m.name}`;
                             select.appendChild(opt);
                         });
                         if (currentModel && models.some(m => m.name === currentModel)) {
