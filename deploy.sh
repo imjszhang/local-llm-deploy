@@ -130,13 +130,15 @@ qinfo = model.get('quants', {}).get(quant, {})
 params = model.get('params', {})
 extra = ' '.join(params.get('extra_args', []))
 repo_name = model.get('repo_name') or model['repo_id'].replace('/', '-')
-print(f\"{model['repo_id']}|{model.get('alias', '')}|{model.get('default_port', 8001)}|{quant}|{params.get('temp', '')}|{params.get('top_p', '')}|{params.get('ctx_size', '')}|{params.get('n_predict', '')}|{params.get('repeat_penalty', '')}|{extra}|{repo_name}\")
+mmproj = model.get('mmproj', '')
+chat_tmpl = model.get('chat_template_file', '')
+print(f\"{model['repo_id']}|{model.get('alias', '')}|{model.get('default_port', 8001)}|{quant}|{params.get('temp', '')}|{params.get('top_p', '')}|{params.get('ctx_size', '')}|{params.get('n_predict', '')}|{params.get('repeat_penalty', '')}|{extra}|{repo_name}|{mmproj}|{chat_tmpl}\")
 " 2>&1) || {
         echo -e "${RED}错误: 模型 '$MODEL_NAME' 未在 models.json 中找到${NC}"
         exit 1
     }
 
-    IFS='|' read -r CFG_REPO_ID CFG_ALIAS CFG_PORT CFG_QUANT CFG_TEMP CFG_TOP_P CFG_CTX CFG_NPREDICT CFG_REPEAT CFG_EXTRA CFG_REPO_NAME <<< "$MODEL_CONFIG"
+    IFS='|' read -r CFG_REPO_ID CFG_ALIAS CFG_PORT CFG_QUANT CFG_TEMP CFG_TOP_P CFG_CTX CFG_NPREDICT CFG_REPEAT CFG_EXTRA CFG_REPO_NAME CFG_MMPROJ CFG_CHAT_TMPL <<< "$MODEL_CONFIG"
 
     ALIAS="${ALIAS:-$CFG_ALIAS}"
     PORT="${PORT:-$CFG_PORT}"
@@ -238,6 +240,12 @@ echo -e "${GREEN}MODEL:   $MODEL_DIR${NC}"
 echo -e "${GREEN}参数:    temp=$TEMP top_p=$TOP_P ctx=$CTX_SIZE n_predict=$N_PREDICT${NC}"
 echo -e "${GREEN}日志:    $LOG_FILE${NC}"
 echo -e "${GREEN}监控:    /metrics 已启用${NC}"
+if [ -n "$CFG_MMPROJ" ] && [ -n "$CFG_REPO_NAME" ] && [ -f "$MODELS_DIR/$CFG_REPO_NAME/$CFG_MMPROJ" ]; then
+    echo -e "${GREEN}多模态:   已启用 (mmproj)${NC}"
+fi
+if [ -n "$CFG_CHAT_TMPL" ]; then
+    echo -e "${GREEN}模板:    $CFG_CHAT_TMPL${NC}"
+fi
 if [ -n "$API_KEY" ] || [ -n "$API_KEY_FILE" ]; then
     echo -e "${GREEN}认证:    已启用 ($([ -n "$API_KEY" ] && echo "API Key" || echo "$API_KEY_FILE"))${NC}"
 else
@@ -278,6 +286,24 @@ LLAMA_ARGS=(
     --slots
     --threads-http 64
 )
+
+# 追加 mmproj（多模态视觉）
+if [ -n "$CFG_MMPROJ" ] && [ -n "$CFG_REPO_NAME" ]; then
+    MMPROJ_FILE="$MODELS_DIR/$CFG_REPO_NAME/$CFG_MMPROJ"
+    if [ -f "$MMPROJ_FILE" ]; then
+        LLAMA_ARGS+=(--mmproj "$MMPROJ_FILE")
+    fi
+fi
+
+# 追加自定义 chat template（修复模型内置模板的兼容性问题）
+if [ -n "$CFG_CHAT_TMPL" ]; then
+    CHAT_TMPL_FILE="$SCRIPT_DIR/$CFG_CHAT_TMPL"
+    if [ -f "$CHAT_TMPL_FILE" ]; then
+        LLAMA_ARGS+=(--chat-template-file "$CHAT_TMPL_FILE")
+    else
+        echo -e "${YELLOW}警告: chat_template_file 不存在: $CHAT_TMPL_FILE，将使用模型内置模板${NC}"
+    fi
+fi
 
 # 追加 extra_args（如 --jinja、--reasoning-budget 等）
 if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then

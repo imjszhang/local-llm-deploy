@@ -1,7 +1,7 @@
 #!/bin/bash
 # 通用模型下载脚本
-# 从 models.json 读取 repo_id 和量化版本，使用 huggingface_hub 下载
-# 用法: ./download.sh <模型名> [--quant X]
+# 从 models.json 读取 repo_id 和量化版本，支持 ModelScope（默认）和 HuggingFace 两种下载源
+# 用法: ./download.sh <模型名> [--quant X] [--source modelscope|huggingface]
 
 set -e
 
@@ -13,11 +13,16 @@ MODELS_DIR="$SCRIPT_DIR/models"
 MODEL_NAME="$1"
 shift || true
 QUANT=""
+SOURCE="${DOWNLOAD_SOURCE:-modelscope}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --quant)
             QUANT="$2"
+            shift 2
+            ;;
+        --source)
+            SOURCE="$2"
             shift 2
             ;;
         *)
@@ -27,8 +32,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ "$SOURCE" != "modelscope" && "$SOURCE" != "huggingface" ]]; then
+    echo -e "\033[0;31m错误: --source 仅支持 modelscope 或 huggingface，当前值: '$SOURCE'\033[0m"
+    exit 1
+fi
+
 if [ -z "$MODEL_NAME" ]; then
-    echo "用法: $0 <模型名> [--quant X]"
+    echo "用法: $0 <模型名> [--quant X] [--source modelscope|huggingface]"
     echo ""
     echo "可用模型:"
     python3 -c "
@@ -80,26 +90,49 @@ else
     PYTHON_BIN="${PYTHON_BIN:-$(which python3 2>/dev/null || which python 2>/dev/null)}"
 fi
 
+if [ "$SOURCE" = "modelscope" ]; then
+    SOURCE_LABEL="ModelScope 魔搭"
+else
+    SOURCE_LABEL="HuggingFace"
+fi
+
 echo "========================================"
 echo "模型下载: $MODEL_NAME"
 echo "========================================"
-echo "HF 仓库:   $REPO_ID"
+echo "下载源:    $SOURCE_LABEL"
+echo "仓库:      $REPO_ID"
 echo "量化版本:  $QUANT"
 echo "匹配模式:  $PATTERN"
 echo "目标目录:  $TARGET_DIR"
 echo "Python:    $PYTHON_BIN"
 echo "========================================"
 
-# 确保 huggingface_hub 已安装
-"$PYTHON_BIN" -c "import huggingface_hub" 2>/dev/null || {
-    echo "正在安装 huggingface_hub 和 hf_transfer..."
-    "$PYTHON_BIN" -m pip install -U huggingface_hub hf_transfer
-}
-
 mkdir -p "$TARGET_DIR"
 
-echo "开始下载 $REPO_ID (包含 $PATTERN)..."
-"$PYTHON_BIN" -c "
+if [ "$SOURCE" = "modelscope" ]; then
+    "$PYTHON_BIN" -c "import modelscope" 2>/dev/null || {
+        echo "正在安装 modelscope..."
+        "$PYTHON_BIN" -m pip install -q modelscope
+    }
+
+    echo "开始下载 $REPO_ID (包含 $PATTERN) [ModelScope]..."
+    "$PYTHON_BIN" -c "
+from modelscope import snapshot_download
+snapshot_download(
+    '$REPO_ID',
+    cache_dir='$MODELS_DIR/.cache',
+    local_dir='$TARGET_DIR',
+    allow_patterns=['$PATTERN'],
+)
+"
+else
+    "$PYTHON_BIN" -c "import huggingface_hub" 2>/dev/null || {
+        echo "正在安装 huggingface_hub 和 hf_transfer..."
+        "$PYTHON_BIN" -m pip install -U huggingface_hub hf_transfer
+    }
+
+    echo "开始下载 $REPO_ID (包含 $PATTERN) [HuggingFace]..."
+    "$PYTHON_BIN" -c "
 from huggingface_hub import snapshot_download
 snapshot_download(
     repo_id='$REPO_ID',
@@ -107,6 +140,7 @@ snapshot_download(
     allow_patterns=['$PATTERN'],
 )
 "
+fi
 
 echo ""
 echo "========================================"
