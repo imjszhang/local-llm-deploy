@@ -192,7 +192,9 @@ LLAMA_ARGS=(
     --metrics
     --slots
     --reasoning-budget -1
+    --threads-http 64
 )
+# 推理时 /metrics、/slots 会阻塞，扩大 HTTP 线程池避免耗尽后无法处理新请求（含 OpenAI 接口）
 if [ -n "$API_KEY" ]; then
     LLAMA_ARGS+=(--api-key "$API_KEY")
 elif [ -n "$API_KEY_FILE" ]; then
@@ -201,20 +203,22 @@ fi
 # 启用 slots_debug：/slots 端点将返回每个槽位的 prompt 和 generated 文本，
 # 供监控页实时查看生成内容。注意：这会暴露用户的输入和输出文本，
 # 仅建议在受信任网络中使用。
-export LLAMA_SERVER_SLOTS_DEBUG=1
+# 使用 env 前缀确保子进程必定收到该变量（避免通过 systemd/其他方式启动时丢失）
+LLAMA_SERVER_SLOTS_DEBUG=1
+export LLAMA_SERVER_SLOTS_DEBUG
 
-nohup "$CPP_DIR/build/bin/llama-server" "${LLAMA_ARGS[@]}" > "$LOG_FILE" 2>&1 &
+nohup env LLAMA_SERVER_SLOTS_DEBUG=1 "$CPP_DIR/build/bin/llama-server" "${LLAMA_ARGS[@]}" > "$LOG_FILE" 2>&1 &
 
 echo "   等待服务启动（模型加载需数分钟）..."
 sleep 30
 
-# 健康检查
+# 健康检查（curl 必须加超时，否则服务加载模型时可能无响应导致脚本卡死）
 echo -e "${YELLOW}[3/3] 健康检查...${NC}"
 MAX_RETRIES=12
 RETRY=0
-CURL_OPTS=(-s "http://localhost:$PORT/health")
+CURL_OPTS=(-s --connect-timeout 5 --max-time 10 "http://localhost:$PORT/health")
 if [ -n "$HEALTH_API_KEY" ]; then
-    CURL_OPTS=(-s -H "Authorization: Bearer $HEALTH_API_KEY" "http://localhost:$PORT/health")
+    CURL_OPTS=(-s --connect-timeout 5 --max-time 10 -H "Authorization: Bearer $HEALTH_API_KEY" "http://localhost:$PORT/health")
 fi
 while [ $RETRY -lt $MAX_RETRIES ]; do
     HEALTH=$(curl "${CURL_OPTS[@]}" 2>/dev/null || echo "")
@@ -274,10 +278,16 @@ if [ -n "$HEALTH_API_KEY" ]; then
     echo "   健康检查: curl -s -H 'Authorization: Bearer <key>' http://localhost:$PORT/health"
     echo "   推理指标: curl -s -H 'Authorization: Bearer <key>' http://localhost:$PORT/metrics"
     echo "   槽位状态: curl -s -H 'Authorization: Bearer <key>' http://localhost:$PORT/slots"
+    echo ""
+    echo -e "${YELLOW}slots_debug 已启用，监控页可显示生成内容。若仍提示需启用，请检查日志是否含 'slots debug = 1':${NC}"
+    echo "   tail -20 $LOG_FILE | grep -i slots"
 else
     echo "   健康检查: curl -s http://localhost:$PORT/health"
     echo "   推理指标: curl -s http://localhost:$PORT/metrics"
     echo "   槽位状态: curl -s http://localhost:$PORT/slots"
+    echo ""
+    echo -e "${YELLOW}slots_debug 已启用，监控页可显示生成内容。若仍提示需启用，请检查日志是否含 'slots debug = 1':${NC}"
+    echo "   tail -20 $LOG_FILE | grep -i slots"
 fi
 echo ""
 echo -e "${YELLOW}硬件监控 (Apple Silicon):${NC}"

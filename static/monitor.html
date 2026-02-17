@@ -47,7 +47,7 @@
             <button onclick="localStorage.setItem('glm5_api_base', document.getElementById('apiBase').value.trim() || '/api'); fetchAll()">保存</button>
             <button onclick="localStorage.removeItem('glm5_api_base'); location.reload()" style="background:var(--muted)">清除缓存</button>
         </div>
-        <p class="refresh">默认 /api 经本服务代理，自动认证。若数据为空请点「清除缓存」后强制刷新 (Cmd+Shift+R)</p>
+        <p class="refresh">默认 /api 经本服务代理，自动认证。推理时 /metrics、/slots 会阻塞，轮询已降频（12s）以避免服务卡死，超时后会提示「推理中」。</p>
     </div>
 
     <div class="card">
@@ -85,8 +85,8 @@
 
         let hasProcessing = false;
         let pollTimer = null;
-        const POLL_FAST = 1500;
-        const POLL_IDLE = 5000;
+        const POLL_FAST = 12000;   // 推理时 12s 轮询（/metrics、/slots 会阻塞主循环，过于频繁会导致服务卡死）
+        const POLL_IDLE = 10000;  // 空闲时 10s 刷新
 
         function headers() {
             return { 'Accept': 'application/json, text/plain' };
@@ -128,24 +128,39 @@
             return origin + (base.startsWith('/') ? base : '/' + base) + path;
         }
 
-        function fetchWithTimeout(url, opts, ms = 30000) {
+        // 推理时 llama-server 的 /metrics /slots 会阻塞，短超时快速释放线程，代理层 8s 超时
+        const MONITOR_TIMEOUT_MS = 10000;  // 10s，略大于代理超时
+        const BLOCKED_HINT = '推理中，监控接口被阻塞，请稍后刷新';
+        function fetchWithTimeout(url, opts, ms = MONITOR_TIMEOUT_MS) {
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), ms);
             return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(timer));
         }
 
         function errMsg(e) {
-            return e.name === 'AbortError' ? '请求超时 (30s)' : e.message;
+            if (!e) return BLOCKED_HINT;
+            if (e.name === 'AbortError') return BLOCKED_HINT;
+            const msg = (e.message || '').toLowerCase();
+            if (msg.includes('abort') || msg.includes('aborted')) return BLOCKED_HINT;
+            return e.message || BLOCKED_HINT;
         }
 
+        let firstLoad = true;
         async function fetchAll() {
+            const scrollY = window.scrollY;
             const base = localStorage.getItem('glm5_api_base') || '/api';
             if (base.includes('8001') || base.includes(':8001')) {
                 localStorage.setItem('glm5_api_base', '/api');
             }
             document.getElementById('apiBase').value = base.includes('8001') ? '/api' : base;
 
-            // 独立请求：单个端点失败不影响其他
+            // 局部刷新：不整体清空，仅首屏显示加载
+            if (firstLoad) {
+                document.getElementById('metrics').innerHTML = '<div class="metric slot-muted">加载中...</div>';
+                document.getElementById('slots').innerHTML = '<div class="metric slot-muted">加载中...</div>';
+            }
+
+            // 独立请求：单个端点失败不影响其他，只更新成功的部分
             const [healthResult, metricsResult, slotsResult] = await Promise.allSettled([
                 fetchWithTimeout(apiUrl('/health'), { headers: headers() }),
                 fetchWithTimeout(apiUrl('/metrics'), { headers: headers() }),
@@ -162,7 +177,7 @@
                 document.getElementById('healthText').textContent = errMsg(healthResult.reason);
             }
 
-            // 推理指标
+            // 推理指标：仅在有结果时更新，失败则保留原内容
             if (metricsResult.status === 'fulfilled') {
                 const metricsRes = metricsResult.value;
                 if (metricsRes.ok) {
@@ -173,13 +188,13 @@
                         .map(([k, label]) => `<div class="metric"><span>${label}</span><span>${typeof m[k] === 'number' && m[k] % 1 ? m[k].toFixed(2) : m[k]}</span></div>`)
                         .join('') || '<div class="metric"><span>无数据</span></div>';
                 } else {
-                    document.getElementById('metrics').innerHTML = `<div class="error">${metricsRes.status === 401 ? '需认证' : '获取失败'} (${metricsRes.status})</div>`;
+                    const msg = metricsRes.status === 504 ? BLOCKED_HINT : (metricsRes.status === 401 ? '需认证' : `获取失败 (${metricsRes.status})`);
+                    document.getElementById('metrics').innerHTML = `<div class="error">${msg}</div>`;
                 }
-            } else {
-                document.getElementById('metrics').innerHTML = `<div class="error">${errMsg(metricsResult.reason)}</div>`;
             }
+            // metrics 失败时不覆盖，保留原内容
 
-            // 槽位状态
+            // 槽位状态：仅在有结果时更新
             if (slotsResult.status === 'fulfilled') {
                 const slotsRes = slotsResult.value;
                 if (slotsRes.ok) {
@@ -229,17 +244,21 @@
                         document.getElementById('slots').innerHTML = `<div class="error">解析失败: ${e.message}</div>`;
                     }
                 } else {
-                    document.getElementById('slots').innerHTML = `<div class="error">获取失败 (${slotsRes.status})</div>`;
+                    const msg = slotsRes.status === 504 ? BLOCKED_HINT : `获取失败 (${slotsRes.status})`;
+                    document.getElementById('slots').innerHTML = `<div class="error">${msg}</div>`;
                 }
-            } else {
-                document.getElementById('slots').innerHTML = `<div class="error">${errMsg(slotsResult.reason)}</div>`;
             }
+            // slots 失败时不覆盖，保留原内容
+
             document.getElementById('lastUpdate').textContent = `上次更新: ${new Date().toLocaleTimeString('zh-CN')}`;
 
             // 自动滚动生成内容区和思考区到底部
             document.querySelectorAll('.slot-generated, .slot-thinking').forEach(el => { el.scrollTop = el.scrollHeight; });
 
-            // 自适应轮询：有槽位处理中时 1.5s，全部空闲时 5s
+            requestAnimationFrame(() => window.scrollTo(0, scrollY));
+            firstLoad = false;
+
+            // 有推理时 2s 更新槽位，空闲时 10s 刷新
             schedulePoll();
         }
 

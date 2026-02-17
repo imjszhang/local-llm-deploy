@@ -4,6 +4,7 @@
 自动读取 .api-key 并代理请求到 llama-server，无需手动输入密钥
 """
 import os
+import socket
 import sys
 import urllib.request
 import urllib.error
@@ -14,6 +15,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(SCRIPT_DIR, "static")
 API_KEY_FILE = os.path.join(SCRIPT_DIR, ".api-key")
 LLAMA_BASE = os.environ.get("LLAMA_API_BASE", "http://127.0.0.1:8001")
+# 大 prompt + thinking 场景：7k prompt~281s，生成 8.31 tok/s，20k prompt+10k 生成约 35min
+API_PROXY_TIMEOUT = int(os.environ.get("API_PROXY_TIMEOUT", "3600"))
+# 监控接口超时：llama-server 推理时 /metrics /slots 会阻塞，短超时快速释放线程避免服务卡死
+MONITOR_PROXY_TIMEOUT = int(os.environ.get("MONITOR_PROXY_TIMEOUT", "8"))
 
 
 def load_api_key():
@@ -47,6 +52,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
     def proxy_request(self, method):
         path = self.path[4:]  # strip /api
         url = LLAMA_BASE.rstrip("/") + path
+        # 监控接口推理时易阻塞，使用短超时
+        monitor_paths = ("health", "metrics", "slots")
+        timeout = MONITOR_PROXY_TIMEOUT if path.lstrip("/").split("?")[0] in monitor_paths else API_PROXY_TIMEOUT
         if self.raw_requestline and b"?" in self.raw_requestline:
             # preserve query string
             pass
@@ -74,7 +82,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 if body:
                     req.add_header("Content-Type", self.headers.get("Content-Type", "application/json"))
 
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 self.send_response(resp.status)
                 for k, v in resp.headers.items():
                     if k.lower() not in ("transfer-encoding", "content-length"):
@@ -95,6 +103,14 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(e.read())
+        except urllib.error.URLError as e:
+            if isinstance(getattr(e, "reason", None), socket.timeout) or "timed out" in str(e).lower():
+                self.send_response(504)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write('{"error":"推理中，监控接口被阻塞，请稍后刷新"}'.encode("utf-8"))
+            else:
+                self.send_error(502, str(e))
         except Exception as e:
             self.send_error(502, str(e))
 
