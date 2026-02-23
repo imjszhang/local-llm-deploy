@@ -6,6 +6,7 @@ Local LLM Deploy — 前端静态服务 + 多模型 API 代理 + 推理请求队
 路由规则:
   /v1/models             → OpenAI 标准模型列表
   /v1/chat/completions   → 按请求体 model 字段路由到对应后端（推荐）
+  /v1/embeddings         → 按请求体 model 字段路由到 embedding 后端
   /api/models            → 返回运行中的模型列表（从 run/*.pid 读取）
   /api/<model-name>/*    → 代理到该模型对应的后端端口
   /api/*                 → 代理到默认（第一个运行中的）后端
@@ -36,6 +37,9 @@ MONITOR_PROXY_TIMEOUT = int(os.environ.get("MONITOR_PROXY_TIMEOUT", "8"))
 INFERENCE_PATHS = frozenset({
     "v1/chat/completions", "v1/completions",
     "chat/completions", "completions",
+})
+EMBEDDING_PATHS = frozenset({
+    "v1/embeddings", "embeddings",
 })
 MAX_QUEUE_DEPTH = int(os.environ.get("MAX_QUEUE_DEPTH", "5"))
 QUEUE_KEEPALIVE_SEC = int(os.environ.get("QUEUE_KEEPALIVE_SEC", "5"))
@@ -201,6 +205,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
         if clean_path in INFERENCE_PATHS and model_name:
             self._gated_inference(url, method, body, model_name)
+        elif clean_path in EMBEDDING_PATHS and model_name:
+            _log(f"[embed] {self.client_address[0]} → {model_name}")
+            self._forward_request(url, method, body, API_PROXY_TIMEOUT)
         else:
             monitor_paths = ("health", "metrics", "slots")
             timeout = (
@@ -252,6 +259,14 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 return
             url = backend_url.rstrip("/") + self.path
             self._gated_inference(url, method, body, model_name)
+        elif clean_path in EMBEDDING_PATHS:
+            model_name, backend_url = self._resolve_model_from_body(body)
+            if not backend_url:
+                self.send_error(503, "No running embedding models")
+                return
+            url = backend_url.rstrip("/") + "/v1/embeddings"
+            _log(f"[embed] {self.client_address[0]} → {model_name}")
+            self._forward_request(url, method, body, API_PROXY_TIMEOUT)
         else:
             models = get_running_models()
             if models:

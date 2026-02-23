@@ -157,13 +157,30 @@ get_model_dir() {
 # 检查模型是否已下载
 is_downloaded() {
     local model="$1"
-    local default_quant
-    default_quant=$(json_model_field "$model" "default_quant") || return 1
-    local model_dir
-    model_dir=$(get_model_dir "$model" "$default_quant") || return 1
-    local gguf_count
-    gguf_count=$(find "$model_dir" -maxdepth 1 -name "*.gguf" 2>/dev/null | wc -l | tr -d ' ')
-    [ "$gguf_count" -gt 0 ]
+    local model_type
+    model_type=$(json_model_field "$model" "type" 2>/dev/null) || true
+
+    if [ "$model_type" = "embedding" ]; then
+        local repo_name
+        repo_name=$(json_model_field "$model" "repo_name" 2>/dev/null) || true
+        if [ -z "$repo_name" ]; then
+            local repo_id
+            repo_id=$(json_model_field "$model" "repo_id") || return 1
+            repo_name=$(echo "$repo_id" | tr '/' '-')
+        fi
+        local model_dir="$MODELS_DIR/$repo_name"
+        local st_count
+        st_count=$(find "$model_dir" -maxdepth 1 -name "*.safetensors" 2>/dev/null | wc -l | tr -d ' ')
+        [ "$st_count" -gt 0 ]
+    else
+        local default_quant
+        default_quant=$(json_model_field "$model" "default_quant") || return 1
+        local model_dir
+        model_dir=$(get_model_dir "$model" "$default_quant") || return 1
+        local gguf_count
+        gguf_count=$(find "$model_dir" -maxdepth 1 -name "*.gguf" 2>/dev/null | wc -l | tr -d ' ')
+        [ "$gguf_count" -gt 0 ]
+    fi
 }
 
 # ── 命令实现 ──
@@ -173,14 +190,13 @@ cmd_list() {
     echo -e "${BLUE}   已注册模型${NC}"
     echo -e "${BLUE}========================================${NC}"
     echo ""
-    printf "  ${CYAN}%-15s %-12s %-12s %-10s %s${NC}\n" "模型" "默认端口" "已下载" "状态" "量化版本"
-    echo "  ──────────────────────────────────────────────────────────────────"
+    printf "  ${CYAN}%-15s %-10s %-12s %-12s %-10s %s${NC}\n" "模型" "类型" "默认端口" "已下载" "状态" "详情"
+    echo "  ──────────────────────────────────────────────────────────────────────────"
 
     for model in $(json_list_models); do
-        local port
+        local port model_type
         port=$(json_model_field "$model" "default_port")
-        local default_quant
-        default_quant=$(json_model_field "$model" "default_quant")
+        model_type=$(json_model_field "$model" "type" 2>/dev/null) || model_type="chat"
 
         local downloaded="否"
         if is_downloaded "$model" 2>/dev/null; then
@@ -198,16 +214,20 @@ cmd_list() {
             status_text="${YELLOW}已停止${NC}"
         fi
 
-        local quants
-        quants=$(python3 -c "
+        local detail
+        if [ "$model_type" = "embedding" ]; then
+            detail="safetensors"
+        else
+            detail=$(python3 -c "
 import json
 with open('$MODELS_JSON') as f:
     data = json.load(f)
 qs = list(data.get('$model', {}).get('quants', {}).keys())
 print(', '.join(qs))
 " 2>/dev/null)
+        fi
 
-        printf "  %-15s %-12s %-22b %-20b %s\n" "$model" "$port" "$downloaded" "$status_text" "$quants"
+        printf "  %-15s %-10s %-12s %-22b %-20b %s\n" "$model" "$model_type" "$port" "$downloaded" "$status_text" "$detail"
     done
     echo ""
 }
@@ -264,7 +284,14 @@ cmd_download() {
         exit 1
     }
 
-    exec "$SCRIPT_DIR/download.sh" "$model" "$@"
+    local model_type
+    model_type=$(json_model_field "$model" "type" 2>/dev/null) || model_type=""
+
+    if [ "$model_type" = "embedding" ]; then
+        exec "$SCRIPT_DIR/download_jina_embeddings.py"
+    else
+        exec "$SCRIPT_DIR/download.sh" "$model" "$@"
+    fi
 }
 
 cmd_start() {
@@ -272,7 +299,7 @@ cmd_start() {
     shift || true
 
     if [ -z "$model" ]; then
-        echo -e "${RED}用法: $0 start <模型名> [--port P] [--quant X] [其他 deploy.sh 参数]${NC}"
+        echo -e "${RED}用法: $0 start <模型名> [--port P] [--quant X] [其他参数]${NC}"
         echo "可用模型: $(json_list_models | tr '\n' ' ')"
         exit 1
     fi
@@ -291,7 +318,46 @@ cmd_start() {
         exit 1
     fi
 
-    exec "$SCRIPT_DIR/deploy.sh" --model-name "$model" "$@"
+    local model_type
+    model_type=$(json_model_field "$model" "type" 2>/dev/null) || model_type=""
+
+    if [ "$model_type" = "embedding" ]; then
+        local emb_port emb_host
+        emb_port=$(json_model_field "$model" "default_port" 2>/dev/null) || emb_port="8004"
+        emb_host="127.0.0.1"
+
+        # 解析可选参数
+        while [[ $# -gt 0 ]]; do
+            case $1 in
+                --port)  emb_port="$2"; shift 2 ;;
+                --host)  emb_host="$2"; shift 2 ;;
+                --lan)   emb_host="0.0.0.0"; shift ;;
+                *)       shift ;;
+            esac
+        done
+
+        local log_file="$LOGS_DIR/$model.log"
+        echo -e "${BLUE}启动 embedding 服务: $model${NC}"
+
+        if [ -f "$SCRIPT_DIR/.venv-embed/bin/python" ]; then
+            PYTHON_BIN="$SCRIPT_DIR/.venv-embed/bin/python"
+        elif [ -f "$SCRIPT_DIR/.venv/bin/python" ]; then
+            PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+        else
+            PYTHON_BIN="${PYTHON_BIN:-$(which python3 2>/dev/null || which python 2>/dev/null)}"
+        fi
+
+        nohup "$PYTHON_BIN" "$SCRIPT_DIR/serve_embedding.py" \
+            --model-name "$model" \
+            --port "$emb_port" \
+            --host "$emb_host" \
+            > "$log_file" 2>&1 &
+
+        echo -e "${GREEN}已启动 $model (PID $!, 端口 $emb_port)${NC}"
+        echo "日志: tail -f $log_file"
+    else
+        exec "$SCRIPT_DIR/deploy.sh" --model-name "$model" "$@"
+    fi
 }
 
 cmd_stop() {
@@ -372,8 +438,10 @@ cmd_help() {
     echo "  $0 download glm-5                              # 默认从 ModelScope 下载"
     echo "  $0 download glm-5 --source huggingface          # 从 HuggingFace 下载"
     echo "  $0 download qwen3.5 --quant UD-Q2_K_XL"
+    echo "  $0 download jina-embed                          # 下载 embedding 模型"
     echo "  $0 start glm-5"
     echo "  $0 start qwen3.5 --port 8003"
+    echo "  $0 start jina-embed                             # 启动 embedding 服务"
     echo "  $0 stop glm-5"
     echo "  $0 stop --all"
     echo "  $0 status"

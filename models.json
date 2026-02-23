@@ -92,5 +92,16 @@
         "40"
       ]
     }
+  },
+  "jina-embed": {
+    "type": "embedding",
+    "repo_id": "jinaai/jina-embeddings-v5-text-small",
+    "repo_name": "jinaai-jina-embeddings-v5-text-small",
+    "alias": "jina-embeddings-v5-text-small",
+    "default_port": 8004,
+    "params": {
+      "dimensions": 1024,
+      "default_task": "text-matching"
+    }
   }
 }
