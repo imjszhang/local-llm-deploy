@@ -212,8 +212,28 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
     # ── OpenAI 兼容路由 (/v1/*) ──
 
+    def _check_auth(self):
+        """校验 Bearer token，若 .api-key 存在则要求客户端携带。
+        返回 True 表示通过（或无需认证），False 表示已返回 401。"""
+        expected = load_api_key()
+        if not expected:
+            return True
+        auth = self.headers.get("Authorization", "")
+        if auth == f"Bearer {expected}":
+            return True
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        err = json.dumps(
+            {"error": {"message": "Invalid API key", "type": "invalid_request_error"}},
+        )
+        self.wfile.write(err.encode("utf-8"))
+        return False
+
     def openai_request(self, method):
         """处理 /v1/* 路由，通过请求体 model 字段路由到对应后端"""
+        if not self._check_auth():
+            return
         clean_path = self.path.lstrip("/").split("?")[0]
 
         if clean_path == "v1/models":
