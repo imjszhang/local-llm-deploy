@@ -87,10 +87,24 @@ def _parse_body_summary(body, kind="infer"):
 
 
 def _log_request_summary(kind, path, method, client_ip, model_name, body_summary, full_body=None):
-    """记录请求摘要到 stderr，若配置了 ACCESS_LOG_FILE 则追加 JSONL 行。"""
+    """记录请求摘要到 stderr。JSONL 在响应完成后由 _log_request_and_response 写入。"""
+    parts = [f"[{kind}]", client_ip, "→", model_name, f"path={path}"]
+    for k, v in body_summary.items():
+        parts.append(f"{k}={v}")
+    _log(" ".join(str(p) for p in parts))
+
+
+def _log_request_and_response(
+    kind, path, method, client_ip, model_name, body_summary,
+    full_body=None, response_body=None,
+):
+    """仅在配置了 ACCESS_LOG_FILE 时写入一行 JSONL，含请求信息与 response_body。"""
+    if not ACCESS_LOG_FILE:
+        return
     ts = time.time()
     record = {
         "ts": ts,
+        "kind": kind,
         "path": path,
         "method": method,
         "client_ip": client_ip,
@@ -99,18 +113,20 @@ def _log_request_summary(kind, path, method, client_ip, model_name, body_summary
     }
     if full_body is not None and LOG_BODY:
         record["body"] = full_body
-    parts = [f"[{kind}]", client_ip, "→", model_name, f"path={path}"]
-    for k, v in body_summary.items():
-        parts.append(f"{k}={v}")
-    _log(" ".join(str(p) for p in parts))
-    if ACCESS_LOG_FILE:
-        try:
-            line = json.dumps(record, ensure_ascii=False) + "\n"
-            with _access_log_lock:
-                with open(ACCESS_LOG_FILE, "a", encoding="utf-8") as f:
-                    f.write(line)
-        except OSError as e:
-            _log(f"access_log write failed: {e}")
+    if response_body is not None:
+        if isinstance(response_body, bytes):
+            record["response_body"] = response_body.decode("utf-8", errors="replace")
+        else:
+            record["response_body"] = response_body
+    else:
+        record["response_body"] = None
+    try:
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        with _access_log_lock:
+            with open(ACCESS_LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(line)
+    except OSError as e:
+        _log(f"access_log write failed: {e}")
 
 
 def load_api_key():
@@ -273,7 +289,12 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             full_body = body.decode("utf-8", errors="replace") if (LOG_BODY and body) else None
             _log_request_summary("embed", self.path, method, self.client_address[0], model_name, body_summary, full_body)
             _log(f"[embed] {self.client_address[0]} → {model_name}")
-            self._forward_request(url, method, body, API_PROXY_TIMEOUT)
+            capture = bool(ACCESS_LOG_FILE)
+            resp_body = self._forward_request(url, method, body, API_PROXY_TIMEOUT, capture_response=capture)
+            _log_request_and_response(
+                "embed", self.path, method, self.client_address[0], model_name,
+                body_summary, full_body, resp_body,
+            )
         else:
             monitor_paths = ("health", "metrics", "slots")
             timeout = (
@@ -335,7 +356,12 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             full_body = body.decode("utf-8", errors="replace") if (LOG_BODY and body) else None
             _log_request_summary("embed", self.path, method, self.client_address[0], model_name, body_summary, full_body)
             _log(f"[embed] {self.client_address[0]} → {model_name}")
-            self._forward_request(url, method, body, API_PROXY_TIMEOUT)
+            capture = bool(ACCESS_LOG_FILE)
+            resp_body = self._forward_request(url, method, body, API_PROXY_TIMEOUT, capture_response=capture)
+            _log_request_and_response(
+                "embed", self.path, method, self.client_address[0], model_name,
+                body_summary, full_body, resp_body,
+            )
         else:
             models = get_running_models()
             if models:
@@ -412,11 +438,16 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             if gate.semaphore.acquire(blocking=False):
                 try:
                     _log(f"[infer] {client_ip} → {model_name}")
+                    capture = bool(ACCESS_LOG_FILE)
                     if is_stream:
                         self._send_stream_headers()
-                        self._forward_with_keepalive(url, method, body)
+                        resp_body = self._forward_with_keepalive(url, method, body, capture_response=capture)
                     else:
-                        self._forward_request(url, method, body, API_PROXY_TIMEOUT)
+                        resp_body = self._forward_request(url, method, body, API_PROXY_TIMEOUT, capture_response=capture)
+                    _log_request_and_response(
+                        "infer", self.path, method, client_ip, model_name,
+                        body_summary, full_body, resp_body,
+                    )
                 finally:
                     gate.semaphore.release()
                     _log(
@@ -432,9 +463,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             )
 
             if is_stream:
-                self._queued_stream(gate, url, method, body, client_ip, model_name)
+                self._queued_stream(gate, url, method, body, client_ip, model_name, body_summary, full_body)
             else:
-                self._queued_block(gate, url, method, body, client_ip, model_name)
+                self._queued_block(gate, url, method, body, client_ip, model_name, body_summary, full_body)
 
             _log(
                 f"[infer] {client_ip} → {model_name} "
@@ -443,7 +474,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         finally:
             gate.leave_queue()
 
-    def _queued_stream(self, gate, url, method, body, client_ip, model_name):
+    def _queued_stream(self, gate, url, method, body, client_ip, model_name, body_summary=None, full_body=None):
         """Streaming request: send headers + keepalive while queued, then relay."""
         self._send_stream_headers()
 
@@ -456,11 +487,16 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
         try:
             _log(f"[infer] {client_ip} → {model_name} (queued)")
-            self._forward_with_keepalive(url, method, body)
+            capture = bool(ACCESS_LOG_FILE)
+            resp_body = self._forward_with_keepalive(url, method, body, capture_response=capture)
+            _log_request_and_response(
+                "infer", self.path, method, client_ip, model_name,
+                body_summary or {}, full_body, resp_body,
+            )
         finally:
             gate.semaphore.release()
 
-    def _queued_block(self, gate, url, method, body, client_ip, model_name):
+    def _queued_block(self, gate, url, method, body, client_ip, model_name, body_summary=None, full_body=None):
         """Non-streaming request: block until semaphore available."""
         if not gate.semaphore.acquire(timeout=API_PROXY_TIMEOUT):
             self.send_response(504)
@@ -474,7 +510,12 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             return
         try:
             _log(f"[infer] {client_ip} → {model_name} (queued)")
-            self._forward_request(url, method, body, API_PROXY_TIMEOUT)
+            capture = bool(ACCESS_LOG_FILE)
+            resp_body = self._forward_request(url, method, body, API_PROXY_TIMEOUT, capture_response=capture)
+            _log_request_and_response(
+                "infer", self.path, method, client_ip, model_name,
+                body_summary or {}, full_body, resp_body,
+            )
         finally:
             gate.semaphore.release()
 
@@ -513,8 +554,10 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         self.wfile.write(b"\r\n")
         self.wfile.flush()
 
-    def _forward_request(self, url, method, body, timeout):
-        """Forward request and relay full response (headers + body)."""
+    def _forward_request(self, url, method, body, timeout, capture_response=False):
+        """Forward request and relay full response (headers + body).
+        If capture_response is True, returns the response body bytes; otherwise returns None."""
+        out = [] if capture_response else None
         try:
             req = self._build_backend_request(url, method, body)
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -529,12 +572,19 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     if not chunk:
                         break
                     self._write_chunk(chunk)
+                    if out is not None:
+                        out.append(chunk)
                 self.wfile.write(b"0\r\n\r\n")
+            return b"".join(out) if out is not None else None
         except urllib.error.HTTPError as e:
             self.send_response(e.code)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(e.read())
+            err_body = e.read()
+            self.wfile.write(err_body)
+            if out is not None:
+                return err_body
+            return None
         except urllib.error.URLError as e:
             if (
                 isinstance(getattr(e, "reason", None), socket.timeout)
@@ -550,14 +600,17 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 self.send_error(502, str(e))
         except Exception as e:
             self.send_error(502, str(e))
+        return None
 
-    def _forward_with_keepalive(self, url, method, body):
+    def _forward_with_keepalive(self, url, method, body, capture_response=False):
         """Forward to backend with keepalive during long prompt processing.
         Stream headers must already be sent before calling this method.
         Uses a reader thread so the main thread can send keepalive while
-        the backend is processing the prompt (no data flowing yet)."""
+        the backend is processing the prompt (no data flowing yet).
+        If capture_response is True, returns the concatenated response body bytes."""
         req = self._build_backend_request(url, method, body)
         data_q = queue.Queue()
+        out = [] if capture_response else None
 
         def reader():
             try:
@@ -590,6 +643,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
                 if msg_type == "data":
                     self._write_chunk(payload)
+                    if out is not None:
+                        out.append(payload)
                 elif msg_type == "done":
                     break
                 elif msg_type == "http_error":
@@ -603,17 +658,19 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                                 "type": "server_error",
                             }
                         }
-                    self._write_chunk(
-                        f"data: {json.dumps(err_json)}\n\ndata: [DONE]\n\n".encode()
-                    )
+                    chunk_data = f"data: {json.dumps(err_json)}\n\ndata: [DONE]\n\n".encode()
+                    self._write_chunk(chunk_data)
+                    if out is not None:
+                        out.append(chunk_data)
                     break
                 elif msg_type == "error":
                     err = {
                         "error": {"message": payload, "type": "server_error"}
                     }
-                    self._write_chunk(
-                        f"data: {json.dumps(err)}\n\ndata: [DONE]\n\n".encode()
-                    )
+                    chunk_data = f"data: {json.dumps(err)}\n\ndata: [DONE]\n\n".encode()
+                    self._write_chunk(chunk_data)
+                    if out is not None:
+                        out.append(chunk_data)
                     break
         except (BrokenPipeError, ConnectionResetError, OSError):
             _log("[infer] 客户端断开")
@@ -623,6 +680,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
+        return b"".join(out) if out is not None else None
 
     # ── 端点处理 ──
 
