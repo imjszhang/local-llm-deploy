@@ -133,13 +133,14 @@ extra = ' '.join(params.get('extra_args', []))
 repo_name = model.get('repo_name') or model['repo_id'].replace('/', '-')
 mmproj = model.get('mmproj', '')
 chat_tmpl = model.get('chat_template_file', '')
-print(f\"{model['repo_id']}|{model.get('alias', '')}|{model.get('default_port', 8001)}|{quant}|{params.get('temp', '')}|{params.get('top_p', '')}|{params.get('ctx_size', '')}|{params.get('n_predict', '')}|{params.get('repeat_penalty', '')}|{extra}|{repo_name}|{mmproj}|{chat_tmpl}\")
+max_conc = params.get('max_concurrent', 1)
+print(f\"{model['repo_id']}|{model.get('alias', '')}|{model.get('default_port', 8001)}|{quant}|{params.get('temp', '')}|{params.get('top_p', '')}|{params.get('ctx_size', '')}|{params.get('n_predict', '')}|{params.get('repeat_penalty', '')}|{extra}|{repo_name}|{mmproj}|{chat_tmpl}|{max_conc}\")
 " 2>&1) || {
         echo -e "${RED}错误: 模型 '$MODEL_NAME' 未在 models.json 中找到${NC}"
         exit 1
     }
 
-    IFS='|' read -r CFG_REPO_ID CFG_ALIAS CFG_PORT CFG_QUANT CFG_TEMP CFG_TOP_P CFG_CTX CFG_NPREDICT CFG_REPEAT CFG_EXTRA CFG_REPO_NAME CFG_MMPROJ CFG_CHAT_TMPL <<< "$MODEL_CONFIG"
+    IFS='|' read -r CFG_REPO_ID CFG_ALIAS CFG_PORT CFG_QUANT CFG_TEMP CFG_TOP_P CFG_CTX CFG_NPREDICT CFG_REPEAT CFG_EXTRA CFG_REPO_NAME CFG_MMPROJ CFG_CHAT_TMPL CFG_MAX_CONCURRENT <<< "$MODEL_CONFIG"
 
     ALIAS="${ALIAS:-$CFG_ALIAS}"
     PORT="${PORT:-$CFG_PORT}"
@@ -193,6 +194,7 @@ TOP_P="${TOP_P:-0.95}"
 CTX_SIZE="${CTX_SIZE:-16384}"
 N_PREDICT="${N_PREDICT:-32768}"
 REPEAT_PENALTY="${REPEAT_PENALTY:-1.0}"
+MAX_CONCURRENT="${CFG_MAX_CONCURRENT:-1}"
 
 DISPLAY_NAME="${MODEL_NAME:-$ALIAS}"
 LOG_FILE="$LOGS_DIR/${MODEL_NAME:-custom}.log"
@@ -267,7 +269,7 @@ echo -e "${GREEN}MODEL:   ${MODEL_DIR_ROOT:-$MODEL_DIR}${NC}"
 if [ -n "${MODEL_DIR_ROOT:-}" ] && [ "$MODEL_DIR" != "$MODEL_DIR_ROOT" ]; then
     echo -e "${GREEN} GGUF:   $MODEL_DIR${NC}"
 fi
-echo -e "${GREEN}参数:    temp=$TEMP top_p=$TOP_P ctx=$CTX_SIZE n_predict=$N_PREDICT${NC}"
+echo -e "${GREEN}参数:    temp=$TEMP top_p=$TOP_P ctx=$CTX_SIZE n_predict=$N_PREDICT parallel=$MAX_CONCURRENT${NC}"
 echo -e "${GREEN}日志:    $LOG_FILE${NC}"
 echo -e "${GREEN}监控:    /metrics 已启用${NC}"
 if [ -n "$CFG_MMPROJ" ]; then
@@ -314,6 +316,7 @@ LLAMA_ARGS=(
     --repeat-penalty "$REPEAT_PENALTY"
     --host "$HOST"
     --port "$PORT"
+    --parallel "$MAX_CONCURRENT"
     --metrics
     --slots
     --threads-http 64

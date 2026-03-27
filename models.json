@@ -59,6 +59,8 @@
       "ctx_size": 262144,
       "n_predict": 32768,
       "repeat_penalty": 1.0,
+      "max_concurrent": 2,
+      "kv_budget_ratio": 0.9,
       "extra_args": [
         "--jinja",
         "--reasoning-budget",
@@ -96,6 +98,8 @@
       "ctx_size": 131072,
       "n_predict": 32768,
       "repeat_penalty": 1.0,
+      "max_concurrent": 2,
+      "kv_budget_ratio": 0.9,
       "extra_args": [
         "--jinja",
         "--reasoning-budget",

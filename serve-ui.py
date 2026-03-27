@@ -11,8 +11,9 @@ Local LLM Deploy — 前端静态服务 + 多模型 API 代理 + 推理请求队
   /api/<model-name>/*    → 代理到该模型对应的后端端口
   /api/*                 → 代理到默认（第一个运行中的）后端
 
-推理请求队列:
-  推理接口按模型串行处理，防止请求互相取消。
+推理请求队列（KV 预算感知）:
+  每模型按 KV token 预算控制并发（短请求可多路并行，长请求自动串行）。
+  全局跨模型并发上限防止统一内存带宽被打满。
   排队期间对流式请求发送 SSE keepalive 保持连接。
 """
 import errno
@@ -44,6 +45,9 @@ EMBEDDING_PATHS = frozenset({
 })
 MAX_QUEUE_DEPTH = int(os.environ.get("MAX_QUEUE_DEPTH", "5"))
 QUEUE_KEEPALIVE_SEC = int(os.environ.get("QUEUE_KEEPALIVE_SEC", "5"))
+MAX_GLOBAL_CONCURRENT = int(os.environ.get("MAX_GLOBAL_CONCURRENT", "3"))
+KV_CHARS_PER_TOKEN = float(os.environ.get("KV_CHARS_PER_TOKEN", "2.5"))
+MODELS_JSON = os.path.join(SCRIPT_DIR, "models.json")
 ACCESS_LOG_FILE = os.environ.get("SERVE_UI_ACCESS_LOG", "").strip() or None
 LOG_BODY = os.environ.get("SERVE_UI_LOG_BODY", "").strip().lower() in ("1", "true", "yes")
 
@@ -146,6 +150,63 @@ def load_api_key():
     return None
 
 
+def _load_models_json():
+    """Load models.json, cached per-process with 30s TTL."""
+    now = time.monotonic()
+    cache = getattr(_load_models_json, "_cache", None)
+    if cache and now - cache[1] < 30:
+        return cache[0]
+    try:
+        with open(MODELS_JSON) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+    _load_models_json._cache = (data, now)
+    return data
+
+
+def _get_model_params(model_name):
+    """Return params dict for a model from models.json, or empty dict."""
+    data = _load_models_json()
+    model = data.get(model_name)
+    if model and isinstance(model, dict):
+        return model.get("params", {})
+    return {}
+
+
+def estimate_kv_tokens(body, model_name):
+    """Estimate KV token usage from request body.
+
+    Returns (estimated_kv, max_tokens_used) where estimated_kv is
+    prompt_estimate + max_tokens and max_tokens_used is the generation
+    cap taken from the request or model config fallback.
+    """
+    prompt_chars = 0
+    max_tokens = 0
+    if body:
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+            data = {}
+        if isinstance(data, dict):
+            max_tokens = data.get("max_tokens") or 0
+            messages = data.get("messages")
+            if isinstance(messages, list):
+                for msg in messages:
+                    content = msg.get("content") if isinstance(msg, dict) else None
+                    if isinstance(content, str):
+                        prompt_chars += len(content)
+                    elif isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                                prompt_chars += len(part["text"])
+    if not max_tokens:
+        params = _get_model_params(model_name)
+        max_tokens = params.get("n_predict", 32768)
+    prompt_tokens_est = int(prompt_chars / KV_CHARS_PER_TOKEN) if prompt_chars else 0
+    return prompt_tokens_est + max_tokens, max_tokens
+
+
 def get_running_models():
     """从 run/*.pid 读取运行中的模型列表，返回 {name: {pid, port, model}}"""
     models = {}
@@ -184,43 +245,172 @@ def get_default_port():
     return int(os.environ.get("LLAMA_PORT", "8001"))
 
 
-# ── 推理请求队列 ──────────────────────────────────────────────
+# ── 推理请求队列（KV 预算感知） ──────────────────────────────────
 
 
-class InferenceGate:
-    """Per-model concurrency gate: semaphore(1) + queue depth tracking."""
+class ModelBudgetGate:
+    """Per-model KV budget pool with concurrency control.
 
-    def __init__(self):
-        self.semaphore = threading.Semaphore(1)
-        self._lock = threading.Lock()
-        self._depth = 0
+    Replaces the old Semaphore(1)-based InferenceGate.  Allows up to
+    ``max_slots`` concurrent requests as long as the sum of their
+    estimated KV token usage stays within ``total_budget``.
+    """
+
+    def __init__(self, model_name, ctx_size=131072, max_slots=1,
+                 kv_budget_ratio=0.9):
+        self.model_name = model_name
+        self.total_budget = int(ctx_size * kv_budget_ratio)
+        self.max_slots = max(1, max_slots)
+        self._condition = threading.Condition()
+        self._active_slots = 0
+        self._used_budget = 0
+        self._queue_depth = 0
+
+    @property
+    def active_slots(self):
+        return self._active_slots
+
+    @property
+    def used_budget(self):
+        return self._used_budget
 
     @property
     def queue_depth(self):
-        return self._depth
+        return self._queue_depth
 
     def enter_queue(self):
-        """Try to enter the queue. Returns False if full."""
-        with self._lock:
-            if self._depth >= MAX_QUEUE_DEPTH:
+        with self._condition:
+            if self._queue_depth >= MAX_QUEUE_DEPTH:
                 return False
-            self._depth += 1
+            self._queue_depth += 1
             return True
 
     def leave_queue(self):
+        with self._condition:
+            self._queue_depth = max(0, self._queue_depth - 1)
+
+    def _can_acquire(self, estimated_kv):
+        if self._active_slots >= self.max_slots:
+            return False
+        if self._used_budget + estimated_kv <= self.total_budget:
+            return True
+        # First request always allowed to avoid deadlock
+        return self._active_slots == 0
+
+    def acquire(self, estimated_kv, timeout=None):
+        """Try to acquire a slot with the given KV budget.
+
+        Returns True if acquired, False on timeout.
+        """
+        with self._condition:
+            if self._can_acquire(estimated_kv):
+                self._active_slots += 1
+                self._used_budget += estimated_kv
+                return True
+            if timeout is not None and timeout <= 0:
+                return False
+            deadline = (time.monotonic() + timeout) if timeout else None
+            while True:
+                remaining = None
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return False
+                self._condition.wait(timeout=remaining)
+                if self._can_acquire(estimated_kv):
+                    self._active_slots += 1
+                    self._used_budget += estimated_kv
+                    return True
+
+    def acquire_nonblocking(self, estimated_kv):
+        """Non-blocking acquire. Returns True if immediately available."""
+        with self._condition:
+            if self._can_acquire(estimated_kv):
+                self._active_slots += 1
+                self._used_budget += estimated_kv
+                return True
+            return False
+
+    def release(self, estimated_kv):
+        with self._condition:
+            self._used_budget = max(0, self._used_budget - estimated_kv)
+            self._active_slots = max(0, self._active_slots - 1)
+            self._condition.notify_all()
+
+    def budget_snapshot(self):
+        """Return a dict describing current budget state."""
+        with self._condition:
+            return {
+                "total": self.total_budget,
+                "used": self._used_budget,
+                "active_slots": self._active_slots,
+                "max_slots": self.max_slots,
+                "queue_depth": self._queue_depth,
+            }
+
+
+class GlobalBudgetGate:
+    """Cross-model global concurrency limiter."""
+
+    def __init__(self, max_concurrent):
+        self._semaphore = threading.Semaphore(max(1, max_concurrent))
+        self._max = max(1, max_concurrent)
+        self._lock = threading.Lock()
+        self._active = 0
+
+    @property
+    def active(self):
+        return self._active
+
+    @property
+    def max_concurrent(self):
+        return self._max
+
+    def acquire(self, timeout=None):
+        ok = self._semaphore.acquire(timeout=timeout)
+        if ok:
+            with self._lock:
+                self._active += 1
+        return ok
+
+    def acquire_nonblocking(self):
+        ok = self._semaphore.acquire(blocking=False)
+        if ok:
+            with self._lock:
+                self._active += 1
+        return ok
+
+    def release(self):
         with self._lock:
-            self._depth = max(0, self._depth - 1)
+            self._active = max(0, self._active - 1)
+        self._semaphore.release()
+
+    def snapshot(self):
+        with self._lock:
+            return {"active": self._active, "max": self._max}
 
 
 _gates_lock = threading.Lock()
 _inference_gates: dict = {}
+_global_gate = GlobalBudgetGate(MAX_GLOBAL_CONCURRENT)
 
 
 def get_inference_gate(model_name):
     with _gates_lock:
         if model_name not in _inference_gates:
-            _inference_gates[model_name] = InferenceGate()
+            params = _get_model_params(model_name)
+            ctx_size = params.get("ctx_size", 131072)
+            max_slots = params.get("max_concurrent", 1)
+            kv_ratio = params.get("kv_budget_ratio", 0.9)
+            _inference_gates[model_name] = ModelBudgetGate(
+                model_name, ctx_size=ctx_size,
+                max_slots=max_slots, kv_budget_ratio=kv_ratio,
+            )
         return _inference_gates[model_name]
+
+
+def get_global_gate():
+    return _global_gate
 
 
 # ── HTTP Handler ──────────────────────────────────────────────
@@ -417,6 +607,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
     def _gated_inference(self, url, method, body, model_name):
         gate = get_inference_gate(model_name)
+        g_gate = get_global_gate()
         client_ip = self.client_address[0]
 
         if not gate.enter_queue():
@@ -435,6 +626,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         full_body = body.decode("utf-8", errors="replace") if (LOG_BODY and body) else None
         _log_request_summary("infer", self.path, method, client_ip, model_name, body_summary, full_body)
 
+        est_kv, _ = estimate_kv_tokens(body, model_name)
+
         is_stream = False
         if body:
             try:
@@ -444,8 +637,17 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
         t0 = time.monotonic()
         try:
-            # Fast path: no contention
-            if gate.semaphore.acquire(blocking=False):
+            # Fast path: try both gates non-blocking
+            got_global = g_gate.acquire_nonblocking()
+            got_model = got_global and gate.acquire_nonblocking(est_kv)
+
+            if got_global and got_model:
+                snap = gate.budget_snapshot()
+                _log(
+                    f"[budget] {client_ip} → {model_name} "
+                    f"est={est_kv} used={snap['used']}/{snap['total']} "
+                    f"slots={snap['active_slots']}/{snap['max_slots']} → ALLOW"
+                )
                 try:
                     _log(f"[infer] {client_ip} → {model_name}")
                     capture = bool(ACCESS_LOG_FILE)
@@ -459,23 +661,33 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                         body_summary, full_body, resp_body,
                     )
                 finally:
-                    gate.semaphore.release()
+                    gate.release(est_kv)
+                    g_gate.release()
                     _log(
                         f"[infer] {client_ip} → {model_name} "
                         f"done ({time.monotonic() - t0:.1f}s)"
                     )
                 return
 
+            if got_global:
+                g_gate.release()
+
             # Slow path: queue wait
+            snap = gate.budget_snapshot()
+            _log(
+                f"[budget] {client_ip} → {model_name} "
+                f"est={est_kv} used={snap['used']}/{snap['total']} "
+                f"slots={snap['active_slots']}/{snap['max_slots']} → QUEUE"
+            )
             _log(
                 f"[queue] {client_ip} 排队等待 {model_name} "
                 f"(depth={gate.queue_depth})"
             )
 
             if is_stream:
-                self._queued_stream(gate, url, method, body, client_ip, model_name, body_summary, full_body)
+                self._queued_stream(gate, g_gate, est_kv, url, method, body, client_ip, model_name, body_summary, full_body)
             else:
-                self._queued_block(gate, url, method, body, client_ip, model_name, body_summary, full_body)
+                self._queued_block(gate, g_gate, est_kv, url, method, body, client_ip, model_name, body_summary, full_body)
 
             _log(
                 f"[infer] {client_ip} → {model_name} "
@@ -484,15 +696,26 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         finally:
             gate.leave_queue()
 
-    def _queued_stream(self, gate, url, method, body, client_ip, model_name, body_summary=None, full_body=None):
+    def _queued_stream(self, gate, g_gate, est_kv, url, method, body,
+                       client_ip, model_name, body_summary=None, full_body=None):
         """Streaming request: send headers + keepalive while queued, then relay."""
         self._send_stream_headers()
 
-        while not gate.semaphore.acquire(timeout=QUEUE_KEEPALIVE_SEC):
+        # Wait for model gate (with keepalive)
+        while not gate.acquire(est_kv, timeout=QUEUE_KEEPALIVE_SEC):
             try:
                 self._write_chunk(b": keepalive\n\n")
             except (BrokenPipeError, ConnectionResetError, OSError):
                 _log(f"[queue] {client_ip} 断开，取消排队 {model_name}")
+                return
+
+        # Got model gate; now acquire global (with keepalive)
+        while not g_gate.acquire(timeout=QUEUE_KEEPALIVE_SEC):
+            try:
+                self._write_chunk(b": keepalive\n\n")
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                _log(f"[queue] {client_ip} 断开，取消排队 {model_name}")
+                gate.release(est_kv)
                 return
 
         try:
@@ -504,11 +727,13 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 body_summary or {}, full_body, resp_body,
             )
         finally:
-            gate.semaphore.release()
+            gate.release(est_kv)
+            g_gate.release()
 
-    def _queued_block(self, gate, url, method, body, client_ip, model_name, body_summary=None, full_body=None):
-        """Non-streaming request: block until semaphore available."""
-        if not gate.semaphore.acquire(timeout=API_PROXY_TIMEOUT):
+    def _queued_block(self, gate, g_gate, est_kv, url, method, body,
+                      client_ip, model_name, body_summary=None, full_body=None):
+        """Non-streaming request: block until budget available."""
+        if not gate.acquire(est_kv, timeout=API_PROXY_TIMEOUT):
             self.send_response(504)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -518,6 +743,19 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             )
             self.wfile.write(err.encode("utf-8"))
             return
+
+        if not g_gate.acquire(timeout=API_PROXY_TIMEOUT):
+            gate.release(est_kv)
+            self.send_response(504)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            err = json.dumps(
+                {"error": {"message": "全局队列等待超时", "type": "server_error"}},
+                ensure_ascii=False,
+            )
+            self.wfile.write(err.encode("utf-8"))
+            return
+
         try:
             _log(f"[infer] {client_ip} → {model_name} (queued)")
             capture = bool(ACCESS_LOG_FILE)
@@ -527,7 +765,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 body_summary or {}, full_body, resp_body,
             )
         finally:
-            gate.semaphore.release()
+            gate.release(est_kv)
+            g_gate.release()
 
     # ── 转发与保活 ──
 
@@ -755,21 +994,27 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def handle_models_endpoint(self):
-        """返回运行中的模型列表，包含队列状态"""
+        """返回运行中的模型列表，包含队列与 KV 预算状态"""
         models = get_running_models()
         result = []
         for name, info in models.items():
             gate = _inference_gates.get(name)
-            result.append(
-                {
-                    "name": name,
-                    "model": info.get("model", name),
-                    "port": info["port"],
-                    "pid": info["pid"],
-                    "queue": gate.queue_depth if gate else 0,
-                }
-            )
-        body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+            entry = {
+                "name": name,
+                "model": info.get("model", name),
+                "port": info["port"],
+                "pid": info["pid"],
+                "queue": gate.queue_depth if gate else 0,
+            }
+            if gate:
+                entry["budget"] = gate.budget_snapshot()
+            result.append(entry)
+        g_snap = get_global_gate().snapshot()
+        payload = {
+            "models": result,
+            "global": g_snap,
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -809,6 +1054,11 @@ def main():
     print()
     print(f"OpenAI 兼容: http://localhost:{port}/v1  (通过 model 字段自动路由)")
     print(f"推理队列: 最大排队 {MAX_QUEUE_DEPTH}，保活间隔 {QUEUE_KEEPALIVE_SEC}s")
+    print(f"全局并发上限: {MAX_GLOBAL_CONCURRENT}，KV 粗算系数: {KV_CHARS_PER_TOKEN} chars/tok")
+    if models:
+        for name in models:
+            g = get_inference_gate(name)
+            print(f"  {name}: max_slots={g.max_slots}, budget={g.total_budget} tok")
     if api_key:
         print("认证: 已从 .api-key 加载")
     else:
