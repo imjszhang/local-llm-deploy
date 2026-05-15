@@ -7,6 +7,7 @@ Local LLM Deploy — 前端静态服务 + 多模型 API 代理 + 推理请求队
   /v1/models             → OpenAI 标准模型列表
   /v1/chat/completions   → 按请求体 model 字段路由到对应后端（推荐）
   /v1/embeddings         → 按请求体 model 字段路由到 embedding 后端
+  models.json 中 type=external 或 external_backend=true 的条目：若 default_port 可连接则视为运行中（无需 run/*.pid）
   /api/models            → 返回运行中的模型列表 + Ollama 聚合状态
   /api/system            → 系统资源信息（CPU/内存/进程）
   /api/ollama/*          → 代理到 Ollama HTTP API
@@ -52,6 +53,7 @@ QUEUE_KEEPALIVE_SEC = int(os.environ.get("QUEUE_KEEPALIVE_SEC", "5"))
 MAX_GLOBAL_CONCURRENT = int(os.environ.get("MAX_GLOBAL_CONCURRENT", "3"))
 KV_CHARS_PER_TOKEN = float(os.environ.get("KV_CHARS_PER_TOKEN", "2.5"))
 MODELS_JSON = os.path.join(SCRIPT_DIR, "models.json")
+EXTERNAL_BACKEND_PROBE_TTL = float(os.environ.get("EXTERNAL_BACKEND_PROBE_TTL", "2"))
 ACCESS_LOG_FILE = os.environ.get("SERVE_UI_ACCESS_LOG", "").strip() or None
 LOG_BODY = os.environ.get("SERVE_UI_LOG_BODY", "").strip().lower() in ("1", "true", "yes")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
@@ -405,32 +407,90 @@ def get_ollama_status():
     return data
 
 
-def get_running_models():
-    """从 run/*.pid 读取运行中的模型列表，返回 {name: {pid, port, model}}"""
-    models = {}
-    if not os.path.isdir(RUN_DIR):
-        return models
-    for fname in os.listdir(RUN_DIR):
-        if not fname.endswith(".pid"):
+def _tcp_connect_ok(host, port, timeout=0.2):
+    """快速探测 TCP 端口是否可连（用于外部 ds4-server 等未写入 run/*.pid 的后端）。"""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _backend_base_url(info):
+    host = info.get("host") or "127.0.0.1"
+    return f"http://{host}:{info['port']}"
+
+
+def _probe_external_json_models():
+    """models.json 中标记为外部的对话后端：端口通则加入路由表。结果缓存 EXTERNAL_BACKEND_PROBE_TTL 秒。"""
+    now = time.monotonic()
+    cache = getattr(_probe_external_json_models, "_cache", None)
+    if cache and now - cache[0] < EXTERNAL_BACKEND_PROBE_TTL:
+        return cache[1]
+
+    found = {}
+    data = _load_models_json()
+    for name, cfg in data.items():
+        if not isinstance(cfg, dict):
             continue
-        fpath = os.path.join(RUN_DIR, fname)
+        if cfg.get("type") == "embedding":
+            continue
+        ext = cfg.get("external_backend") or cfg.get("type") == "external"
+        if not ext:
+            continue
+        port = cfg.get("default_port")
         try:
-            with open(fpath) as f:
-                lines = f.read().strip().split("\n")
-            pid = int(lines[0].strip())
-            port = int(lines[1].strip()) if len(lines) > 1 else 8001
-            name = fname[:-4]
-            model = lines[2].strip() if len(lines) > 2 else name
-            if not model:
-                model = name
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                os.remove(fpath)
-                continue
-            models[name] = {"pid": pid, "port": port, "model": model}
-        except (ValueError, IndexError, FileNotFoundError):
+            port = int(port)
+        except (TypeError, ValueError):
             continue
+        if port <= 0:
+            continue
+        host = (cfg.get("external_host") or "127.0.0.1").strip() or "127.0.0.1"
+        if not _tcp_connect_ok(host, port):
+            continue
+        alias = cfg.get("alias") or name
+        found[name] = {
+            "pid": None,
+            "port": port,
+            "model": alias,
+            "host": host,
+            "external": True,
+        }
+
+    _probe_external_json_models._cache = (now, found)
+    return found
+
+
+def get_running_models():
+    """从 run/*.pid 读取运行中的模型列表，并合并 models.json 外部后端探测结果。
+    返回 {name: {pid, port, model, host?}}"""
+    models = {}
+    if os.path.isdir(RUN_DIR):
+        for fname in os.listdir(RUN_DIR):
+            if not fname.endswith(".pid"):
+                continue
+            fpath = os.path.join(RUN_DIR, fname)
+            try:
+                with open(fpath) as f:
+                    lines = f.read().strip().split("\n")
+                pid = int(lines[0].strip())
+                port = int(lines[1].strip()) if len(lines) > 1 else 8001
+                name = fname[:-4]
+                model = lines[2].strip() if len(lines) > 2 else name
+                if not model:
+                    model = name
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    os.remove(fpath)
+                    continue
+                models[name] = {"pid": pid, "port": port, "model": model}
+            except (ValueError, IndexError, FileNotFoundError):
+                continue
+
+    for name, info in _probe_external_json_models().items():
+        if name not in models:
+            models[name] = info
     return models
 
 
@@ -655,14 +715,13 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         models = get_running_models()
         if len(parts) >= 1 and parts[0] in models:
             model_name = parts[0]
-            port = models[model_name]["port"]
             remaining = "/" + parts[1] if len(parts) > 1 else "/"
-            return f"http://127.0.0.1:{port}", remaining, model_name
+            return _backend_base_url(models[model_name]), remaining, model_name
 
         if models:
             default_name = next(iter(models))
             return (
-                f"http://127.0.0.1:{models[default_name]['port']}",
+                _backend_base_url(models[default_name]),
                 api_path,
                 default_name,
             )
@@ -755,7 +814,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             url = backend_url.rstrip("/") + self.path
             self._gated_inference(url, method, body, model_name)
         elif clean_path in EMBEDDING_PATHS:
-            model_name, backend_url = self._resolve_model_from_body(body)
+            model_name, backend_url = self._resolve_model_from_body(body, embedding_only=True)
             if not backend_url:
                 self._send_error_safe(503, "No running embedding models")
                 return
@@ -774,19 +833,29 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             models = get_running_models()
             if models:
                 default_name = next(iter(models))
-                backend_url = (
-                    f"http://127.0.0.1:{models[default_name]['port']}"
-                )
+                backend_url = _backend_base_url(models[default_name])
             else:
                 port = int(os.environ.get("LLAMA_PORT", "8001"))
                 backend_url = f"http://127.0.0.1:{port}"
             url = backend_url.rstrip("/") + self.path
             self._forward_request(url, method, body, API_PROXY_TIMEOUT)
 
-    def _resolve_model_from_body(self, body):
+    def _resolve_model_from_body(self, body, embedding_only=False):
         """从请求体的 model 字段匹配运行中后端，返回 (model_name, backend_url)。
-        匹配顺序：alias 精确匹配 → 短名精确匹配 → 默认第一个。"""
-        models = get_running_models()
+        匹配顺序：alias 精确匹配 → 短名精确匹配 → 默认第一个。
+        embedding_only=True 时只在 models.json 类型为 embedding 的后端中解析（避免与外部对话后端混淆）。"""
+        mj = _load_models_json()
+        all_models = get_running_models()
+        models = {}
+        for name, info in all_models.items():
+            cfg = mj.get(name)
+            typ = (cfg.get("type") if cfg else None) or "chat"
+            if embedding_only:
+                if typ == "embedding":
+                    models[name] = info
+            else:
+                if typ != "embedding":
+                    models[name] = info
         if not models:
             return None, None
 
@@ -800,15 +869,15 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         if requested:
             for name, info in models.items():
                 if info.get("model") == requested:
-                    return name, f"http://127.0.0.1:{info['port']}"
+                    return name, _backend_base_url(info)
             if requested in models:
                 info = models[requested]
-                return requested, f"http://127.0.0.1:{info['port']}"
+                return requested, _backend_base_url(info)
 
         default_name = next(iter(models))
         return (
             default_name,
-            f"http://127.0.0.1:{models[default_name]['port']}",
+            _backend_base_url(models[default_name]),
         )
 
     # ── 推理门控 ──
@@ -1221,7 +1290,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 "name": name,
                 "model": info.get("model", name),
                 "port": info["port"],
-                "pid": info["pid"],
+                "pid": info.get("pid"),
+                "external": bool(info.get("external")),
                 "queue": gate.queue_depth if gate else 0,
             }
             if gate:
@@ -1259,10 +1329,10 @@ def main():
     print(f"  /api/models → 模型列表")
     if models:
         for name, info in models.items():
-            print(f"  /api/{name}/* → http://127.0.0.1:{info['port']}")
+            print(f"  /api/{name}/* → {_backend_base_url(info)}")
         first_name = next(iter(models))
         print(
-            f"  /api/* → http://127.0.0.1:{models[first_name]['port']}"
+            f"  /api/* → {_backend_base_url(models[first_name])}"
             f" (默认: {first_name})"
         )
     else:

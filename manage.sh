@@ -172,6 +172,8 @@ is_downloaded() {
         local st_count
         st_count=$(find "$model_dir" -maxdepth 1 -name "*.safetensors" 2>/dev/null | wc -l | tr -d ' ')
         [ "$st_count" -gt 0 ]
+    elif [ "$model_type" = "external" ]; then
+        return 0
     else
         local default_quant
         default_quant=$(json_model_field "$model" "default_quant") || return 1
@@ -224,6 +226,9 @@ m = data.get('$model', {})
 mt = m.get('type') or 'chat'
 if mt == 'embedding':
     print('safetensors')
+elif mt == 'external':
+    h = m.get('startup_hint') or 'external / ds4-server'
+    print(h[:80] + ('…' if len(h) > 80 else ''))
 else:
     qs = ', '.join(m.get('quants', {}).keys())
     fn = m.get('full_model_name')
@@ -295,6 +300,12 @@ cmd_download() {
     local model_type
     model_type=$(json_model_field "$model" "type" 2>/dev/null) || model_type=""
 
+    if [ "$model_type" = "external" ]; then
+        echo -e "${RED}错误: $model 为外部推理进程（如 ds4-server），勿使用本仓库 download${NC}"
+        json_model_field "$model" "startup_hint" 2>/dev/null && echo -e "${CYAN}提示: $(json_model_field "$model" "startup_hint")${NC}" || true
+        exit 1
+    fi
+
     if [ "$model_type" = "embedding" ]; then
         exec "$SCRIPT_DIR/download_jina_embeddings.py"
     else
@@ -328,6 +339,12 @@ cmd_start() {
 
     local model_type
     model_type=$(json_model_field "$model" "type" 2>/dev/null) || model_type=""
+
+    if [ "$model_type" = "external" ]; then
+        echo -e "${YELLOW}$model 由外部 ds4-server 提供，不在此仓库内启动。${NC}"
+        json_model_field "$model" "startup_hint" 2>/dev/null && echo -e "${CYAN}$(json_model_field "$model" "startup_hint")${NC}" || true
+        exit 1
+    fi
 
     if [ "$model_type" = "embedding" ]; then
         local emb_port emb_host

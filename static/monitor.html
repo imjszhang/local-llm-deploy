@@ -378,10 +378,10 @@
         <div class="mem-legend" id="memLegend"></div>
     </div>
 
-    <!-- llama-server section -->
+    <!-- 推理后端（llama-server / 外部 OpenAI 兼容服务等） -->
     <div id="llamaSection">
         <div class="card-title" style="padding:0 0 0.5rem">
-            llama-server
+            推理后端
             <span class="badge" id="llamaCount">0 个模型</span>
             <span class="badge" id="globalGate">-</span>
         </div>
@@ -604,7 +604,7 @@
 
         const grid = document.getElementById('llamaGrid');
         if (!models.length) {
-            grid.innerHTML = '<div class="muted-text">无运行中的 llama-server 模型</div>';
+            grid.innerHTML = '<div class="muted-text">无运行中的推理后端（llama-server / embedding / 外部 ds4 等）</div>';
             return;
         }
         grid.innerHTML = '';
@@ -618,6 +618,7 @@
                     <span class="model-name">${escapeHtml(m.model || m.name)}</span>
                     <span class="model-head-right">
                         <span>:${m.port}</span>
+                        ${m.external ? '<span class="badge info">外部</span>' : ''}
                         <span class="conn-dot" id="health-${m.name}"></span>
                         <span id="slots-summary-${m.name}">-</span>
                         ${m.queue > 0 ? `<span class="badge warn">排队 ${m.queue}</span>` : ''}
@@ -690,7 +691,25 @@
     async function fetchModelDetail(m) {
         const base = ORIGIN + '/api/' + m.name;
 
-        // health
+        if (m.external) {
+            try {
+                const hr = await fetch(base + '/v1/models', { signal: AbortSignal.timeout(MONITOR_TIMEOUT) });
+                const dot = document.getElementById('health-' + m.name);
+                if (dot) dot.className = 'conn-dot ' + (hr.ok ? 'ok' : 'err');
+            } catch (e) {
+                const dot = document.getElementById('health-' + m.name);
+                if (dot) dot.className = 'conn-dot err';
+            }
+            const el = document.getElementById('metrics-' + m.name);
+            if (el) el.innerHTML = '<div class="muted-text">外部后端（无 llama.cpp /metrics）</div>';
+            const summary = document.getElementById('slots-summary-' + m.name);
+            if (summary) summary.textContent = '—';
+            const container = document.getElementById('slots-' + m.name);
+            if (container) container.innerHTML = '<div class="muted-text" style="margin-top:0.5rem">外部后端无 /slots 视图</div>';
+            return;
+        }
+
+        // health (llama-server)
         try {
             const hr = await fetch(base + '/health', { signal: AbortSignal.timeout(MONITOR_TIMEOUT) });
             const dot = document.getElementById('health-' + m.name);

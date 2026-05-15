@@ -54,5 +54,20 @@
       "dimensions": 1024,
       "default_task": "text-matching"
     }
+  },
+  "ds4flash": {
+    "type": "external",
+    "full_model_name": "DeepSeek V4 Flash (ds4-server)",
+    "repo_id": "local/ds4-server",
+    "alias": "deepseek-v4-flash",
+    "default_port": 8005,
+    "external_backend": true,
+    "startup_hint": "在 ds4 仓库执行 scripts/ds4-server-mac-studio-512g.sh（默认 DS4_PORT=8005，模型 DS4_MODEL=ds4flash.gguf）",
+    "params": {
+      "ctx_size": 1048576,
+      "n_predict": 393216,
+      "max_concurrent": 1,
+      "kv_budget_ratio": 0.85
+    }
   }
 }
