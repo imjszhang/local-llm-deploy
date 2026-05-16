@@ -18,7 +18,7 @@
 |------|----------|------|----------|
 | jina-embeddings-v5-text-small | 8004 | safetensors | ~1.4GB |
 
-新增模型只需在 `models.json` 中添加配置（`type: "embedding"` 区分类型）。
+新增模型：编辑本地 `models.json`，或使用 `./manage.sh registry merge <补丁.json>` / `registry remove` 等命令。模板见仓库内 `models.json.example`。
 
 ## 快速开始
 
@@ -32,18 +32,21 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# 2. 下载模型
+# 2. 生成本地 models.json（自 models.json.example）
+./manage.sh registry init
+
+# 3. 下载模型（键名以你 registry 中的为准；示例模板含 example-chat / jina-embed）
 ./manage.sh download glm-5                  # 对话模型
 ./manage.sh download jina-embed             # Embedding 模型
 
-# 3. 启动模型
+# 4. 启动模型
 ./manage.sh start glm-5                     # 对话模型
 ./manage.sh start jina-embed                # Embedding 模型
 
-# 4. 查看状态
+# 5. 查看状态
 ./manage.sh status
 
-# 5. 启动前端（聊天 + 监控 + API 代理）
+# 6. 启动前端（聊天 + 监控 + API 代理）
 ./serve-ui.sh
 # 访问 http://localhost:8888/monitor.html
 ```
@@ -51,6 +54,10 @@ pip install -r requirements.txt
 ## 管理命令
 
 ```bash
+./manage.sh registry init                   # 首次从 models.json.example 生成 models.json
+./manage.sh registry list                   # 已注册的模型键
+./manage.sh registry merge patch.json       # 合并/覆盖顶层条目
+./manage.sh registry remove <键名>
 ./manage.sh list                            # 已注册模型（简略）
 ./manage.sh models                          # 各量化目录、体积与 manifest
 ./manage.sh download <模型名> [--quant X]   # 下载模型

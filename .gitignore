@@ -16,6 +16,8 @@ api-keys.txt
 .env
 .env.*
 .hf-env
+models.json
+
 *.key
 *.pem
 

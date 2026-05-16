@@ -422,6 +422,14 @@ cmd_register() {
     "$(python_bin)" "$SCRIPT_DIR/model_inventory.py" register "$@"
 }
 
+cmd_registry() {
+    if [ $# -eq 0 ]; then
+        "$(python_bin)" "$SCRIPT_DIR/registry_cli.py" --help
+        return 0
+    fi
+    "$(python_bin)" "$SCRIPT_DIR/registry_cli.py" "$@"
+}
+
 cmd_logs() {
     local model="$1"
     if [ -z "$model" ]; then
@@ -446,6 +454,7 @@ cmd_help() {
     echo "  download <模型名> [--quant X] [--source S]  下载指定模型"
     echo "  remove <模型名> [--quant Q|--all] [--force] 删除本地权重目录"
     echo "  register <模型名> --path <路径> [--quant Q]  登记自定义路径到 manifest"
+    echo "  registry <子命令> ...          管理 models.json（见下方）"
     echo "  start <模型名> [选项]          启动指定模型"
     echo "  stop <模型名>                  停止指定模型"
     echo "  stop --all                     停止所有模型"
@@ -458,6 +467,13 @@ cmd_help() {
     echo "  $0 remove qwen3.5 --quant UD-Q2_K_XL   # 删除某一量化目录"
     echo "  $0 remove qwen3.5 --all               # 删除该模型所有已声明量化目录"
     echo "  $0 register qwen3.5 --path models/foo/bar --quant UD-Q2_K_XL"
+    echo ""
+    echo "registry（models.json）:"
+    echo "  $0 registry init                   # 从 models.json.example 生成 models.json"
+    echo "  $0 registry list                   # 列出已注册的模型键"
+    echo "  $0 registry show [键名]            # 打印完整 JSON 或单个条目"
+    echo "  $0 registry merge my-patch.json    # 合并/覆盖顶层条目"
+    echo "  $0 registry remove <键名>           # 删除某个模型条目"
     echo "  $0 download glm-5                              # 默认从 ModelScope 下载"
     echo "  $0 download glm-5 --source huggingface          # 从 HuggingFace 下载（未设 HF_ENDPOINT 时默认 hf-mirror）"
     echo "  $0 download qwen3.5 --quant UD-Q2_K_XL   # 完整型号: Qwen3.5-397B-A17B"
@@ -475,14 +491,30 @@ cmd_help() {
 # ── 主入口 ──
 
 if [ ! -f "$MODELS_JSON" ]; then
-    echo -e "${RED}错误: models.json 不存在: $MODELS_JSON${NC}"
-    exit 1
+    case "${1:-help}" in
+        registry)
+            case "${2:-}" in
+                init|help|--help|-h|'') ;;
+                *)
+                    echo -e "${RED}错误: models.json 不存在，请先:${NC} $0 registry init"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        help|--help|-h) ;;
+        *)
+            echo -e "${RED}错误: models.json 不存在: $MODELS_JSON${NC}"
+            echo "初始化注册表: $0 registry init   （从 models.json.example 复制）"
+            exit 1
+            ;;
+    esac
 fi
 
 case "${1:-help}" in
     list)       cmd_list ;;
     models)     cmd_models ;;
     status)     cmd_status ;;
+    registry)   shift; cmd_registry "$@" ;;
     download)   shift; cmd_download "$@" ;;
     remove)     shift; cmd_remove "$@" ;;
     register)   shift; cmd_register "$@" ;;

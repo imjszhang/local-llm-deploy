@@ -104,7 +104,9 @@ OpenAI Client / curl ← JSON 或 SSE 流 ←
 
 | 文件 | 说明 |
 |------|------|
-| `models.json` | 模型注册中心（聊天 + embedding） |
+| `models.json` | 本地模型注册中心（默认 gitignore） |
+| `models.json.example` | 注册表示例模板 |
+| `registry_cli.py` | `./manage.sh registry *` 实现 |
 | `manage.sh` | 统一 CLI 入口 |
 | `deploy.sh` | 聊天模型部署（llama-server） |
 | `download.sh` / `download_model.py` | 统一模型下载（GGUF 对话模型与 embedding） |
@@ -121,6 +123,8 @@ OpenAI Client / curl ← JSON 或 SSE 流 ←
 
 ```bash
 # 模型列表与状态
+./manage.sh registry init    # 首次克隆后生成 models.json
+./manage.sh registry list
 ./manage.sh list
 ./manage.sh models
 ./manage.sh status

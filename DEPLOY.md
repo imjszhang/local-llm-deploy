@@ -9,7 +9,8 @@
 ```
 local-llm-deploy/
 ├── manage.sh              # 统一管理入口
-├── models.json            # 模型注册配置
+├── models.json.example    # 注册表示例（提交仓库）
+├── registry_cli.py        # manage.sh registry 子命令实现
 ├── deploy.sh              # 通用部署脚本
 ├── download.sh            # 下载入口（调用 download_model.py）
 ├── download_model.py      # 统一下载实现（GGUF / embedding / 双源）
@@ -30,6 +31,8 @@ local-llm-deploy/
 ├── logs/                  # 日志文件（自动创建）
 ├── models/                # 模型目录（需下载）
 └── llama.cpp/             # 推理引擎（需克隆编译）
+
+说明：`models.json` 为本地配置，由 `./manage.sh registry init` 从 `models.json.example` 生成，默认不提交（见 `.gitignore`）。
 ```
 
 ---
@@ -53,6 +56,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+### 3. 初始化模型注册表
+
+```bash
+./manage.sh registry init   # 从 models.json.example 生成本地 models.json
+```
+
+维护：`./manage.sh registry list`、`show`、`merge <补丁.json>`、`remove <键名>`。
 
 ---
 
