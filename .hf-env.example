@@ -1,0 +1,6 @@
+# 可选：复制为 .hf-env（已被 .gitignore）。download_model.py 启动时会读取本文件。
+# Hugging Face Hub 镜像（与 huggingface_hub / transformers 一致）
+# HF_ENDPOINT=https://hf-mirror.com
+#
+# 强制使用官方 Hub（覆盖下载脚本中的镜像默认值）：
+# HF_ENDPOINT=https://huggingface.co

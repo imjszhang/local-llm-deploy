@@ -43,7 +43,7 @@
 
 ## 三、下载模型
 
-Jina 为 **safetensors** 格式，通过 ModelScope 魔搭下载，**不走** GGUF 的 `download.sh`。
+Jina 为 **safetensors** 格式，通过 ModelScope 魔搭下载（默认 `--source modelscope`），与对话 GGUF 共用 `download_model.py`。
 
 ### 方式一：manage.sh（推荐）
 
@@ -51,15 +51,17 @@ Jina 为 **safetensors** 格式，通过 ModelScope 魔搭下载，**不走** GG
 ./manage.sh download jina-embed
 ```
 
-内部会调用 `download_jina_embeddings.py`。
+内部由 `download_model.py` 根据 `models.json` 中 `type: embedding` 分支处理。
 
-### 方式二：直接运行 Python 脚本
+### 方式二：直接运行下载脚本
 
 ```bash
-python3 download_jina_embeddings.py
+./download.sh jina-embed
+# 或
+python3 download_model.py jina-embed
 ```
 
-- 会按需安装 `modelscope`。
+- 会按需安装 `modelscope`（若使用 `--source huggingface` 则安装 `huggingface_hub`）。
 - 下载到：`models/jinaai-jina-embeddings-v5-text-small/`，约 1.4GB。
 - 完成后可用 `./manage.sh list` 查看「已下载」状态。
 
@@ -261,7 +263,7 @@ for item in resp.data:
 ## 九、常见问题
 
 1. **未找到模型目录**  
-   先执行：`./manage.sh download jina-embed` 或 `python3 download_jina_embeddings.py`。
+   先执行：`./manage.sh download jina-embed` 或 `python3 download_model.py jina-embed`。
 
 2. **401 Unauthorized**  
    在项目根目录配置 `.api-key`，或去掉该文件关闭认证；请求头带 `Authorization: Bearer <key>`。
@@ -282,7 +284,7 @@ for item in resp.data:
 | 文件 | 作用 |
 |------|------|
 | `models.json` | 注册 `jina-embed`，类型 embedding、端口 8004、alias |
-| `download_jina_embeddings.py` | 从 ModelScope 下载 safetensors 到 `models/jinaai-jina-embeddings-v5-text-small` |
+| `download_model.py` | 统一下载（GGUF / embedding；`download.sh` 为入口包装） |
 | `serve_embedding.py` | 加载 Jina 模型，提供 `/v1/embeddings` 与 `/health` |
 | `manage.sh` | `download` / `start` / `stop` / `status` / `logs` 统一入口 |
 | `serve-ui.py` | 多模型代理，将 `/v1/embeddings` 按 `model` 转发到 Jina（8004） |

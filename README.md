@@ -51,14 +51,20 @@ pip install -r requirements.txt
 ## 管理命令
 
 ```bash
-./manage.sh list                            # 列出所有已注册模型
+./manage.sh list                            # 已注册模型（简略）
+./manage.sh models                          # 各量化目录、体积与 manifest
 ./manage.sh download <模型名> [--quant X]   # 下载模型
+./manage.sh remove <模型名> --quant X       # 删除某一量化目录（需先 stop）
+./manage.sh remove <模型名> --all           # 删除该模型全部已声明量化目录
+./manage.sh register <模型名> --path models/... [--quant X]  # 登记并行路径到 manifest
 ./manage.sh start <模型名> [--port P]       # 启动模型
 ./manage.sh stop <模型名>                   # 停止模型
 ./manage.sh stop --all                      # 停止所有模型
 ./manage.sh status                          # 查看运行中实例
 ./manage.sh logs <模型名>                   # 查看模型日志
 ```
+
+并行下载（`download --to`）会写入 `models/.manifest.json`（位于 `models/` 下，默认已被忽略）；`./manage.sh models` 会列出 manifest 条目。
 
 ## API 接口
 
@@ -105,6 +111,8 @@ Embedding 接口额外支持：
 cp .api-key.example .api-key
 # 编辑 .api-key 填入实际 key（该文件已被 .gitignore 忽略，不会提交）
 ```
+
+使用 `--source huggingface` 下载时，若未设置环境变量 `HF_ENDPOINT`，下载逻辑会默认使用 `https://hf-mirror.com`（由 `download_model.py` 处理）。需要官方 Hub 时执行 `export HF_ENDPOINT=https://huggingface.co`。可将 `cp .hf-env.example .hf-env` 后按需编辑，`download_model.py` 会读取 `.hf-env`。
 
 ## 文档
 

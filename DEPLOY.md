@@ -11,7 +11,10 @@ local-llm-deploy/
 ├── manage.sh              # 统一管理入口
 ├── models.json            # 模型注册配置
 ├── deploy.sh              # 通用部署脚本
-├── download.sh            # 通用下载脚本
+├── download.sh            # 下载入口（调用 download_model.py）
+├── download_model.py      # 统一下载实现（GGUF / embedding / 双源）
+├── model_paths.py         # 本地路径与权重检测（与下载 / 清单共用）
+├── model_inventory.py     # 模型磁盘清单、remove、register、manifest
 ├── serve-ui.py            # 前端 + 多模型 API 代理
 ├── serve-ui.sh            # 前端启动器
 ├── setup_llamacpp.sh      # llama.cpp 编译脚本
@@ -80,6 +83,33 @@ pip install -r requirements.txt
 `--model-dir` 会覆盖 `models.json` 里的默认路径，其余参数（模板、`mmproj`、`extra_args` 等）仍从 `qwen3.5` 读取。多模态用的 `mmproj-F16.gguf` 仍在仓库根目录 `models/unsloth-Qwen3.5-397B-A17B-GGUF/`；若官方更新了 mmproj，请在同一目录替换或单独下载该文件。
 
 **说明**：`manage.sh` 按配置键管理 `run/<键名>.pid`，同名模型同时只能登记一个进程。要在验证新版时**暂时双开**旧版与新版，需要在 `models.json` 里复制一条不同键名的配置（不同 `default_port`），或自行处理第二个进程的 PID/端口，避免互相覆盖。
+
+并行目录可通过 `./manage.sh models` 查看；下载脚本会自动写入 `models/.manifest.json`，也可用 `./manage.sh register` 手动登记。
+
+---
+
+## 二点五、本地权重清单与删除
+
+```bash
+# 各量化是否就绪、估算体积、manifest 路径
+./manage.sh models
+
+# 删除某一量化目录（须先 stop；路径限定在 models/ 下）
+./manage.sh remove qwen3.5 --quant UD-Q2_K_XL
+
+# 删除 models.json 中声明的全部量化子目录
+./manage.sh remove qwen3.5 --all
+
+# Embedding：删除整个 embedding 目录
+./manage.sh remove jina-embed
+
+# 进程仍在运行时会拒绝删除；仅脚本自动化可加 --force
+
+# 手动登记并行目录
+./manage.sh register qwen3.5 --path models/unsloth-Qwen3.5-397B-A17B-GGUF/MXFP4_MOE-next --quant MXFP4_MOE-next
+```
+
+`./manage.sh list` 中的「已下载」与上述检测逻辑一致（默认量化 / embedding）。
 
 ---
 

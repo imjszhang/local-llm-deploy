@@ -19,6 +19,14 @@ MODELS_DIR="$SCRIPT_DIR/models"
 
 mkdir -p "$RUN_DIR" "$LOGS_DIR"
 
+python_bin() {
+    if [ -f "$SCRIPT_DIR/.venv/bin/python" ]; then
+        echo "$SCRIPT_DIR/.venv/bin/python"
+    else
+        echo python3
+    fi
+}
+
 # ── JSON 辅助函数（通过 python3 解析，macOS 自带） ──
 
 json_get() {
@@ -154,44 +162,19 @@ get_model_dir() {
     echo "$MODELS_DIR/$repo_name/$quant"
 }
 
-# 检查模型是否已下载
+# 检查模型是否已下载（与 model_paths / model_inventory 一致）
 is_downloaded() {
     local model="$1"
-    local model_type
-    model_type=$(json_model_field "$model" "type" 2>/dev/null) || true
-
-    if [ "$model_type" = "embedding" ]; then
-        local repo_name
-        repo_name=$(json_model_field "$model" "repo_name" 2>/dev/null) || true
-        if [ -z "$repo_name" ]; then
-            local repo_id
-            repo_id=$(json_model_field "$model" "repo_id") || return 1
-            repo_name=$(echo "$repo_id" | tr '/' '-')
-        fi
-        local model_dir="$MODELS_DIR/$repo_name"
-        local st_count
-        st_count=$(find "$model_dir" -maxdepth 1 -name "*.safetensors" 2>/dev/null | wc -l | tr -d ' ')
-        [ "$st_count" -gt 0 ]
-    elif [ "$model_type" = "external" ]; then
-        return 0
-    else
-        local default_quant
-        default_quant=$(json_model_field "$model" "default_quant") || return 1
-        local model_dir
-        model_dir=$(get_model_dir "$model" "$default_quant") || return 1
-        local gguf_count
-        # ModelScope 等可能在 <quant>/子目录/ 下放分片，允许多一层
-        gguf_count=$(find "$model_dir" -maxdepth 2 -name "*.gguf" 2>/dev/null | wc -l | tr -d ' ')
-        [ "$gguf_count" -gt 0 ]
-    fi
+    "$(python_bin)" "$SCRIPT_DIR/model_inventory.py" is-downloaded "$model"
 }
 
 # ── 命令实现 ──
 
 cmd_list() {
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${BLUE}   已注册模型${NC}"
+    echo -e "${BLUE}   已注册模型（简略）${NC}"
     echo -e "${BLUE}========================================${NC}"
+    echo -e "  ${YELLOW}各量化路径与体积见: $0 models${NC}"
     echo ""
     printf "  ${CYAN}%-15s %-10s %-12s %-12s %-10s %s${NC}\n" "模型" "类型" "默认端口" "已下载" "状态" "详情"
     echo "  ──────────────────────────────────────────────────────────────────────────"
@@ -306,11 +289,7 @@ cmd_download() {
         exit 1
     fi
 
-    if [ "$model_type" = "embedding" ]; then
-        exec "$SCRIPT_DIR/download_jina_embeddings.py"
-    else
-        exec "$SCRIPT_DIR/download.sh" "$model" "$@"
-    fi
+    exec "$SCRIPT_DIR/download.sh" "$model" "$@"
 }
 
 cmd_start() {
@@ -431,6 +410,18 @@ cmd_stop() {
     echo -e "${GREEN}已停止 $target${NC}"
 }
 
+cmd_models() {
+    "$(python_bin)" "$SCRIPT_DIR/model_inventory.py" list
+}
+
+cmd_remove() {
+    "$(python_bin)" "$SCRIPT_DIR/model_inventory.py" remove "$@"
+}
+
+cmd_register() {
+    "$(python_bin)" "$SCRIPT_DIR/model_inventory.py" register "$@"
+}
+
 cmd_logs() {
     local model="$1"
     if [ -z "$model" ]; then
@@ -449,9 +440,12 @@ cmd_help() {
     echo "用法: $0 <命令> [参数]"
     echo ""
     echo "命令:"
-    echo "  list                           列出所有已注册模型"
+    echo "  list                           列出所有已注册模型（简略）"
+    echo "  models                         列出本地权重详情（各量化 / manifest）"
     echo "  status                         查看运行中的模型实例"
     echo "  download <模型名> [--quant X] [--source S]  下载指定模型"
+    echo "  remove <模型名> [--quant Q|--all] [--force] 删除本地权重目录"
+    echo "  register <模型名> --path <路径> [--quant Q]  登记自定义路径到 manifest"
     echo "  start <模型名> [选项]          启动指定模型"
     echo "  stop <模型名>                  停止指定模型"
     echo "  stop --all                     停止所有模型"
@@ -460,8 +454,12 @@ cmd_help() {
     echo ""
     echo "示例:"
     echo "  $0 list"
+    echo "  $0 models                             # 磁盘上的量化与体积"
+    echo "  $0 remove qwen3.5 --quant UD-Q2_K_XL   # 删除某一量化目录"
+    echo "  $0 remove qwen3.5 --all               # 删除该模型所有已声明量化目录"
+    echo "  $0 register qwen3.5 --path models/foo/bar --quant UD-Q2_K_XL"
     echo "  $0 download glm-5                              # 默认从 ModelScope 下载"
-    echo "  $0 download glm-5 --source huggingface          # 从 HuggingFace 下载"
+    echo "  $0 download glm-5 --source huggingface          # 从 HuggingFace 下载（未设 HF_ENDPOINT 时默认 hf-mirror）"
     echo "  $0 download qwen3.5 --quant UD-Q2_K_XL   # 完整型号: Qwen3.5-397B-A17B"
     echo "  $0 download qwen3.5 --to unsloth-Qwen3.5-397B-A17B-GGUF/MXFP4_MOE-next  # 并行目录，不覆盖默认 MXFP4_MOE"
     echo "  $0 download jina-embed                          # 下载 embedding 模型"
@@ -483,8 +481,11 @@ fi
 
 case "${1:-help}" in
     list)       cmd_list ;;
+    models)     cmd_models ;;
     status)     cmd_status ;;
     download)   shift; cmd_download "$@" ;;
+    remove)     shift; cmd_remove "$@" ;;
+    register)   shift; cmd_register "$@" ;;
     start)      shift; cmd_start "$@" ;;
     stop)       shift; cmd_stop "$@" ;;
     logs)       shift; cmd_logs "$@" ;;

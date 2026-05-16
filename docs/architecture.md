@@ -107,8 +107,9 @@ OpenAI Client / curl ← JSON 或 SSE 流 ←
 | `models.json` | 模型注册中心（聊天 + embedding） |
 | `manage.sh` | 统一 CLI 入口 |
 | `deploy.sh` | 聊天模型部署（llama-server） |
-| `download.sh` | 聊天模型 GGUF 下载 |
-| `download_jina_embeddings.py` | Embedding 模型下载 |
+| `download.sh` / `download_model.py` | 统一模型下载（GGUF 对话模型与 embedding） |
+| `model_paths.py` | 本地权重路径推导与检测（与 `manage.sh` / `model_inventory` 一致） |
+| `model_inventory.py` | `manage.sh models` / `remove` / `register`；`models/.manifest.json` |
 | `serve-ui.py` | 前端 + 多模型代理 + 推理队列；/v1/* 与 /api/* |
 | `serve_embedding.py` | Embedding 服务（jina） |
 | `.api-key` | 可选；存在时 /v1/* 需 Bearer 认证 |
@@ -121,6 +122,7 @@ OpenAI Client / curl ← JSON 或 SSE 流 ←
 ```bash
 # 模型列表与状态
 ./manage.sh list
+./manage.sh models
 ./manage.sh status
 
 # 下载与启动（聊天模型 / embedding 均通过 manage.sh）

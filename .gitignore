@@ -15,6 +15,7 @@ api-keys.txt
 *.api-keys
 .env
 .env.*
+.hf-env
 *.key
 *.pem
 

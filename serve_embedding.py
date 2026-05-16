@@ -312,7 +312,7 @@ def main():
         )
     if not os.path.isdir(model_dir):
         print(f"错误: 模型目录不存在: {model_dir}", file=sys.stderr)
-        print("请先下载: python3 download_jina_embeddings.py", file=sys.stderr)
+        print("请先下载: ./manage.sh download jina-embed", file=sys.stderr)
         sys.exit(1)
 
     model = EmbeddingModel(model_dir)
