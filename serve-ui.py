@@ -8,6 +8,7 @@ Local LLM Deploy — 前端静态服务 + 多模型 API 代理 + 推理请求队
   /v1/chat/completions   → 按请求体 model 字段路由到对应后端（推荐）
   /v1/embeddings         → 按请求体 model 字段路由到 embedding 后端
   models.json 中 type=external 或 external_backend=true 的条目：若 default_port 可连接则视为运行中（无需 run/*.pid）
+  models.json 中 type=ollama 或 Ollama 服务在线时自动注册 /api/tags 中的模型（路由至 OLLAMA_HOST /v1/*）
   /api/models            → 返回运行中的模型列表 + Ollama 聚合状态
   /api/system            → 系统资源信息（CPU/内存/进程）
   /api/ollama/*          → 代理到 Ollama HTTP API
@@ -29,6 +30,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -57,6 +59,9 @@ EXTERNAL_BACKEND_PROBE_TTL = float(os.environ.get("EXTERNAL_BACKEND_PROBE_TTL", 
 ACCESS_LOG_FILE = os.environ.get("SERVE_UI_ACCESS_LOG", "").strip() or None
 LOG_BODY = os.environ.get("SERVE_UI_LOG_BODY", "").strip().lower() in ("1", "true", "yes")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+OLLAMA_AUTO_DISCOVER = os.environ.get("OLLAMA_AUTO_DISCOVER", "1").strip().lower() not in (
+    "0", "false", "no",
+)
 SYSTEM_CACHE_TTL = 3
 OLLAMA_CACHE_TTL = 5
 
@@ -416,9 +421,113 @@ def _tcp_connect_ok(host, port, timeout=0.2):
         return False
 
 
+def _parse_ollama_host():
+    """Parse OLLAMA_HOST into (hostname, port)."""
+    parsed = urllib.parse.urlparse(OLLAMA_HOST)
+    host = parsed.hostname or "127.0.0.1"
+    if parsed.port:
+        port = parsed.port
+    elif parsed.scheme == "https":
+        port = 443
+    else:
+        port = 11434
+    return host, port
+
+
+def _ollama_route_name(model_name):
+    """Derive a stable serve-ui route key from an Ollama model tag."""
+    return re.sub(r"[^a-zA-Z0-9_-]+", "-", model_name).strip("-") or "ollama-model"
+
+
+def _ollama_model_entry(route_name, ollama_model, cfg=None):
+    host, port = _parse_ollama_host()
+    alias = (cfg or {}).get("alias") or ollama_model
+    return {
+        "pid": None,
+        "port": port,
+        "host": host,
+        "model": alias,
+        "ollama_model": ollama_model,
+        "external": True,
+        "ollama": True,
+    }
+
+
+def _probe_ollama_models():
+    """Register Ollama models for OpenAI-compatible routing when the daemon is online."""
+    now = time.monotonic()
+    cache = getattr(_probe_ollama_models, "_cache", None)
+    if cache and now - cache[0] < OLLAMA_CACHE_TTL:
+        return cache[1]
+
+    found = {}
+    status = get_ollama_status()
+    if not status or status.get("status") != "running":
+        _probe_ollama_models._cache = (now, found)
+        return found
+
+    available = {m.get("name"): m for m in status.get("available", []) if m.get("name")}
+    if not available:
+        _probe_ollama_models._cache = (now, found)
+        return found
+
+    mj = _load_models_json()
+    claimed = set()
+
+    for name, cfg in mj.items():
+        if not isinstance(cfg, dict) or cfg.get("type") != "ollama":
+            continue
+        ollama_model = cfg.get("ollama_model") or cfg.get("alias") or name
+        if ollama_model not in available:
+            continue
+        route_name = name
+        found[route_name] = _ollama_model_entry(route_name, ollama_model, cfg)
+        claimed.add(ollama_model)
+
+    if OLLAMA_AUTO_DISCOVER:
+        for ollama_model in sorted(available):
+            if ollama_model in claimed:
+                continue
+            route_name = _ollama_route_name(ollama_model)
+            if route_name in found or route_name in mj:
+                route_name = f"ollama-{_ollama_route_name(ollama_model)}"
+            suffix = 2
+            base = route_name
+            while route_name in found or route_name in mj:
+                route_name = f"{base}-{suffix}"
+                suffix += 1
+            found[route_name] = _ollama_model_entry(route_name, ollama_model)
+
+    _probe_ollama_models._cache = (now, found)
+    return found
+
+
 def _backend_base_url(info):
+    if info.get("ollama"):
+        return OLLAMA_HOST
     host = info.get("host") or "127.0.0.1"
     return f"http://{host}:{info['port']}"
+
+
+def _prepare_inference_body(body, model_name):
+    """Rewrite request body for backend-specific model ids (e.g. Ollama tag names)."""
+    if not body:
+        return body
+    models = get_running_models()
+    info = models.get(model_name)
+    if not info or not info.get("ollama"):
+        return body
+    ollama_model = info.get("ollama_model")
+    if not ollama_model:
+        return body
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return body
+    if data.get("model") == ollama_model:
+        return body
+    data["model"] = ollama_model
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
 def _probe_external_json_models():
@@ -491,6 +600,11 @@ def get_running_models():
     for name, info in _probe_external_json_models().items():
         if name not in models:
             models[name] = info
+
+    for name, info in _probe_ollama_models().items():
+        if name not in models:
+            models[name] = info
+
     return models
 
 
@@ -868,6 +982,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
         if requested:
             for name, info in models.items():
+                if info.get("ollama_model") == requested:
+                    return name, _backend_base_url(info)
                 if info.get("model") == requested:
                     return name, _backend_base_url(info)
             if requested in models:
@@ -886,6 +1002,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         gate = get_inference_gate(model_name)
         g_gate = get_global_gate()
         client_ip = self.client_address[0]
+        body = _prepare_inference_body(body, model_name)
 
         if not gate.enter_queue():
             self.send_response(429)
@@ -1050,7 +1167,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
     def _build_backend_request(self, url, method, body):
         headers = {}
         for k, v in self.headers.items():
-            if k.lower() not in ("host", "connection"):
+            if k.lower() not in ("host", "connection", "content-length"):
                 headers[k] = v
         api_key = load_api_key()
         if api_key:
@@ -1250,9 +1367,18 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     "id": alias,
                     "object": "model",
                     "created": created,
-                    "owned_by": "local",
+                    "owned_by": "ollama" if info.get("ollama") else "local",
                 }
             )
+            if info.get("ollama_model") and info["ollama_model"] != alias:
+                data.append(
+                    {
+                        "id": info["ollama_model"],
+                        "object": "model",
+                        "created": created,
+                        "owned_by": "ollama",
+                    }
+                )
             if name != alias:
                 data.append(
                     {
@@ -1292,6 +1418,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 "port": info["port"],
                 "pid": info.get("pid"),
                 "external": bool(info.get("external")),
+                "ollama": bool(info.get("ollama")),
+                "ollama_model": info.get("ollama_model"),
                 "queue": gate.queue_depth if gate else 0,
             }
             if gate:

@@ -212,6 +212,9 @@ if mt == 'embedding':
 elif mt == 'external':
     h = m.get('startup_hint') or 'external / ds4-server'
     print(h[:80] + ('…' if len(h) > 80 else ''))
+elif mt == 'ollama':
+    h = m.get('startup_hint') or m.get('ollama_model') or 'Ollama'
+    print(h[:80] + ('…' if len(h) > 80 else ''))
 else:
     qs = ', '.join(m.get('quants', {}).keys())
     fn = m.get('full_model_name')
@@ -283,8 +286,8 @@ cmd_download() {
     local model_type
     model_type=$(json_model_field "$model" "type" 2>/dev/null) || model_type=""
 
-    if [ "$model_type" = "external" ]; then
-        echo -e "${RED}错误: $model 为外部推理进程（如 ds4-server），勿使用本仓库 download${NC}"
+    if [ "$model_type" = "external" ] || [ "$model_type" = "ollama" ]; then
+        echo -e "${RED}错误: $model 为外部/Ollama 推理后端，勿使用本仓库 download${NC}"
         json_model_field "$model" "startup_hint" 2>/dev/null && echo -e "${CYAN}提示: $(json_model_field "$model" "startup_hint")${NC}" || true
         exit 1
     fi
@@ -321,6 +324,12 @@ cmd_start() {
 
     if [ "$model_type" = "external" ]; then
         echo -e "${YELLOW}$model 由外部 ds4-server 提供，不在此仓库内启动。${NC}"
+        json_model_field "$model" "startup_hint" 2>/dev/null && echo -e "${CYAN}$(json_model_field "$model" "startup_hint")${NC}" || true
+        exit 1
+    fi
+
+    if [ "$model_type" = "ollama" ]; then
+        echo -e "${YELLOW}$model 由 Ollama 提供，不在此仓库内启动。${NC}"
         json_model_field "$model" "startup_hint" 2>/dev/null && echo -e "${CYAN}$(json_model_field "$model" "startup_hint")${NC}" || true
         exit 1
     fi
