@@ -6,7 +6,8 @@
   ./scripts/bench-models.py --list
   ./scripts/bench-models.py --ollama qwen3.6:27b-mlx --llama qwen36-27b-aggressive
   ./scripts/bench-models.py --auto
-  ./scripts/bench-models.py --backend "ds4|llama|http://127.0.0.1:8005|ds4flash"
+  ./scripts/bench-models.py --backend "ds4|openai|http://127.0.0.1:8005|deepseek-v4-flash"
+  ./scripts/bench-models.py --ds4 --ollama qwen3.6:27b-mlx
   ./scripts/bench-models.py --ollama qwen3.6:27b-mlx --rounds 5 --json
 
 环境变量:
@@ -55,7 +56,7 @@ BENCHMARK_CASES = [
 @dataclass
 class Backend:
     label: str
-    kind: str  # "ollama" | "llama"
+    kind: str  # "ollama" | "llama" | "openai"
     host: str
     model: str
     auth: str | None = None
@@ -249,16 +250,59 @@ def resolve_llama_alias(alias: str) -> Backend | None:
     )
 
 
+def _fetch_openai_model_id(host: str, auth: str | None) -> str | None:
+    try:
+        headers = {"Content-Type": "application/json"}
+        if auth:
+            headers["Authorization"] = f"Bearer {auth}"
+        req = urllib.request.Request(host.rstrip("/") + "/v1/models", headers=headers)
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read())
+        models = data.get("data") or data.get("models") or []
+        if models:
+            return models[0].get("id") or models[0].get("name")
+    except Exception:
+        return None
+    return None
+
+
+def resolve_external_alias(alias: str) -> Backend | None:
+    auth = load_api_key()
+    mj = load_models_json()
+    meta = mj.get(alias)
+    if not meta or meta.get("type") != "external":
+        return None
+    port = meta.get("default_port")
+    if not port or not _port_open("127.0.0.1", int(port)):
+        return None
+    host = f"http://127.0.0.1:{int(port)}"
+    model = meta.get("alias") or alias
+    api_model = _fetch_openai_model_id(host, auth) or model
+    note = meta.get("full_model_name") or alias
+    return Backend(
+        label=alias,
+        kind="openai",
+        host=host,
+        model=api_model,
+        auth=auth,
+        note=note,
+    )
+
+
+def resolve_ds4() -> Backend | None:
+    return resolve_external_alias("ds4flash")
+
+
 def parse_backend_spec(spec: str) -> Backend:
-    """格式: label|kind|host|model  例如 my-ds4|llama|http://127.0.0.1:8005|ds4flash"""
+    """格式: label|kind|host|model  例如 ds4|openai|http://127.0.0.1:8005|deepseek-v4-flash"""
     parts = spec.split("|", 3)
     if len(parts) != 4:
         raise ValueError(f"无效 --backend 格式: {spec!r}，应为 label|kind|host|model")
     label, kind, host, model = parts
     kind = kind.lower()
-    if kind not in ("ollama", "llama"):
-        raise ValueError(f"backend kind 必须是 ollama 或 llama，收到: {kind!r}")
-    auth = load_api_key() if kind == "llama" else None
+    if kind not in ("ollama", "llama", "openai"):
+        raise ValueError(f"backend kind 必须是 ollama、llama 或 openai，收到: {kind!r}")
+    auth = load_api_key() if kind in ("llama", "openai") else None
     return Backend(label=label, kind=kind, host=host, model=model, auth=auth)
 
 
@@ -295,7 +339,11 @@ def http_post_json(
         except json.JSONDecodeError:
             continue
         last = chunk
-        if ttft is None and (chunk.get("response") or chunk.get("content")):
+        token_text = chunk.get("response") or chunk.get("content")
+        if not token_text and chunk.get("choices"):
+            choice = chunk["choices"][0]
+            token_text = choice.get("text") or (choice.get("delta") or {}).get("content")
+        if ttft is None and token_text:
             ttft = time.perf_counter() - t0
     last["_ttft"] = ttft
     last["_wall"] = time.perf_counter() - t0
@@ -361,17 +409,79 @@ def bench_llama(backend: Backend, prompt: str, num_predict: int, stream: bool = 
     )
 
 
+def _openai_stream_chunks(
+    backend: Backend, prompt: str, num_predict: int
+) -> tuple[float | None, float, int, dict[str, Any]]:
+    payload = {
+        "model": backend.model,
+        "prompt": prompt,
+        "max_tokens": num_predict,
+        "temperature": 0,
+        "stream": True,
+    }
+    data = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json"}
+    if backend.auth:
+        headers["Authorization"] = f"Bearer {backend.auth}"
+    req = urllib.request.Request(backend.base_url + "/v1/completions", data=data, headers=headers)
+    t0 = time.perf_counter()
+    ttft = None
+    chunks = 0
+    last: dict[str, Any] = {}
+    resp = urllib.request.urlopen(req, timeout=600)
+    for raw in resp:
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if line == "[DONE]":
+            break
+        try:
+            chunk = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        last = chunk
+        text = ""
+        if chunk.get("choices"):
+            text = chunk["choices"][0].get("text") or ""
+        if text:
+            if ttft is None:
+                ttft = time.perf_counter() - t0
+            chunks += 1
+    wall = time.perf_counter() - t0
+    return ttft, wall, chunks, last
+
+
+def bench_openai(backend: Backend, prompt: str, num_predict: int, stream: bool = False) -> RunResult:
+    del stream  # openai 统一用流式采样 TTFT 与 decode
+    ttft, wall, chunks, _ = _openai_stream_chunks(backend, prompt, num_predict)
+    decode_window = max(wall - (ttft or 0), 0.001)
+    ttft_ms = (ttft or 0) * 1000
+    return RunResult(
+        prefill_tps=0.0,
+        decode_tps=chunks / decode_window,
+        prompt_tok=0,
+        gen_tok=chunks,
+        wall_s=wall,
+        ttft_ms=ttft_ms,
+        early_stop=chunks < num_predict * 0.8,
+    )
+
+
 def bench_once(backend: Backend, prompt: str, num_predict: int, stream: bool = False) -> RunResult:
     if backend.kind == "ollama":
         return bench_ollama(backend, prompt, num_predict, stream=stream)
     if backend.kind == "llama":
         return bench_llama(backend, prompt, num_predict, stream=stream)
+    if backend.kind == "openai":
+        return bench_openai(backend, prompt, num_predict, stream=stream)
     raise ValueError(f"未知 backend kind: {backend.kind}")
 
 
 def run_backend(backend: Backend, rounds: int, warmup: bool) -> list[CaseSummary]:
-    if backend.kind == "llama" and not backend.auth:
-        print(f"  [warn] {backend.label}: 未找到 API key，llama-server 可能返回 401", file=sys.stderr)
+    if backend.kind in ("llama", "openai") and not backend.auth:
+        print(f"  [warn] {backend.label}: 未找到 API key，请求可能返回 401", file=sys.stderr)
 
     if warmup:
         try:
@@ -384,10 +494,13 @@ def run_backend(backend: Backend, rounds: int, warmup: bool) -> list[CaseSummary
         summary = CaseSummary(case_id=case_id, case_name=case_name, num_predict=num_predict)
         for _ in range(rounds):
             summary.runs.append(bench_once(backend, prompt, num_predict))
-        try:
-            summary.stream = bench_once(backend, prompt, num_predict, stream=True)
-        except Exception:
-            summary.stream = None
+        if backend.kind == "openai":
+            summary.stream = summary.runs[-1] if summary.runs else None
+        else:
+            try:
+                summary.stream = bench_once(backend, prompt, num_predict, stream=True)
+            except Exception:
+                summary.stream = None
         summaries.append(summary)
     return summaries
 
@@ -510,10 +623,24 @@ def cmd_list(_args: argparse.Namespace) -> int:
     else:
         print("  (无 — 服务未运行或未安装模型)")
 
-    print("\nmodels.json 中其他后端 alias（需自行 --backend 或确保在运行）:")
+    print("\n外部 OpenAI 兼容后端 (models.json type=external):")
     mj = load_models_json()
+    found_external = False
     for alias, meta in mj.items():
-        if meta.get("type") in ("embedding",):
+        if meta.get("type") != "external":
+            continue
+        b = resolve_external_alias(alias)
+        if b:
+            found_external = True
+            print(f"  - {b.label:30} {b.base_url}  model={b.model}")
+            if b.note:
+                print(f"    {b.note}")
+    if not found_external:
+        print("  (无 — 端口未监听)")
+
+    print("\nmodels.json 中其他 alias:")
+    for alias, meta in mj.items():
+        if meta.get("type") in ("embedding", "external"):
             continue
         port = meta.get("default_port", "?")
         kind = meta.get("type") or "llama-server"
@@ -539,9 +666,19 @@ def collect_backends(args: argparse.Namespace) -> list[Backend]:
             add(b)
         for b in discover_llama_backends():
             add(b)
+        mj = load_models_json()
+        for alias, meta in mj.items():
+            if meta.get("type") == "external":
+                add(resolve_external_alias(alias))
         if not backends:
             raise SystemExit("--auto: 未发现任何运行中的 backend")
         return backends
+
+    if args.ds4:
+        b = resolve_ds4()
+        if b is None:
+            raise SystemExit("ds4flash 未运行（端口 8005 不可达）")
+        add(b)
 
     for model in args.ollama or []:
         add(
@@ -564,16 +701,17 @@ def collect_backends(args: argparse.Namespace) -> list[Backend]:
         add(parse_backend_spec(spec))
 
     if not backends:
-        raise SystemExit("请指定 --ollama、--llama、--backend 或 --auto")
+        raise SystemExit("请指定 --ollama、--llama、--ds4、--backend 或 --auto")
     return backends
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="对比 Ollama / llama-server 推理速度")
+    parser = argparse.ArgumentParser(description="对比 Ollama / llama-server / OpenAI 兼容后端推理速度")
     parser.add_argument("--list", action="store_true", help="列出可用 backend")
-    parser.add_argument("--auto", action="store_true", help="自动发现所有运行中的 llama-server 与 Ollama 模型")
+    parser.add_argument("--auto", action="store_true", help="自动发现所有运行中的 backend")
     parser.add_argument("--ollama", action="append", metavar="MODEL", help="Ollama 模型名，可重复")
     parser.add_argument("--llama", action="append", metavar="ALIAS", help="models.json alias 或 run/*.pid 名，可重复")
+    parser.add_argument("--ds4", action="store_true", help="benchmark ds4flash（端口 8005，OpenAI /v1/completions）")
     parser.add_argument(
         "--backend",
         action="append",
