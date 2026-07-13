@@ -19,6 +19,7 @@ from model_paths import (
     chat_quant_dir,
     dir_has_chat_weights,
     dir_has_embedding_weights,
+    dir_has_rerank_weights,
     dir_size_bytes,
     embedding_dir,
     format_size,
@@ -166,6 +167,22 @@ def cmd_list() -> None:
             print("")
             continue
 
+        if mt == "rerank":
+            rd = embedding_dir(cfg)
+            ok = dir_has_rerank_weights(rd)
+            sz = dir_size_bytes(rd) if ok else 0
+            print(f"  目录: {rd}")
+            print(f"  状态: {'已就绪' if ok else '未就绪'}  体积: {format_size(sz)}")
+            for e in entries_by_model.get(name, []):
+                p = os.path.join(PROJECT_ROOT, e["path"])
+                ex = os.path.isdir(p)
+                print(
+                    f"  manifest: {e['path']}  quant={e.get('quant')}  "
+                    f"{'存在' if ex else '缺失'}"
+                )
+            print("")
+            continue
+
         quants = cfg.get("quants") or {}
         default_q = cfg.get("default_quant") or ""
         for q in sorted(quants.keys()):
@@ -220,7 +237,7 @@ def cmd_remove(args: argparse.Namespace) -> None:
         print("external 模型无本地下载目录。", file=sys.stderr)
         sys.exit(1)
 
-    if mt == "embedding":
+    if mt == "embedding" or mt == "rerank":
         safe_rmtree(embedding_dir(cfg), force=force, model_key=model_key)
         remove_manifest_paths_predicate(lambda e: e.get("model_key") == model_key)
         return
@@ -285,10 +302,11 @@ def cmd_register(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     quant = args.quant or None
-    if mt == "embedding":
+    if mt == "embedding" or mt == "rerank":
         quant = None
-        if not dir_has_embedding_weights(abs_path):
-            print("目录内未发现顶层 .safetensors，仍登记 manifest。", file=sys.stderr)
+        ok_fn = dir_has_rerank_weights if mt == "rerank" else dir_has_embedding_weights
+        if not ok_fn(abs_path):
+            print("目录内未发现完整权重，仍登记 manifest。", file=sys.stderr)
     else:
         if not quant:
             print("对话模型请提供 --quant <量化名>", file=sys.stderr)

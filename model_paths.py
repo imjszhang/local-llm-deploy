@@ -85,7 +85,7 @@ def dir_has_chat_weights(path: str) -> bool:
 
 
 def dir_has_embedding_weights(path: str) -> bool:
-    """与 manage.sh is_downloaded embedding 一致：仅顶层 .safetensors。"""
+    """与 manage.sh is_downloaded embedding/rerank 一致：仅顶层 .safetensors。"""
     if not os.path.isdir(path):
         return False
     try:
@@ -97,6 +97,14 @@ def dir_has_embedding_weights(path: str) -> bool:
     except OSError:
         return False
     return False
+
+
+def dir_has_rerank_weights(path: str) -> bool:
+    """MLX rerank 需 model.safetensors + projector.safetensors + rerank.py。"""
+    if not os.path.isdir(path):
+        return False
+    required = ("model.safetensors", "projector.safetensors", "rerank.py")
+    return all(os.path.isfile(os.path.join(path, name)) for name in required)
 
 
 def dir_size_bytes(path: str) -> int:
@@ -140,6 +148,8 @@ def is_model_downloaded(model_key: str, models: dict[str, Any] | None = None) ->
         return True
     if mt == "embedding":
         return dir_has_embedding_weights(embedding_dir(cfg))
+    if mt == "rerank":
+        return dir_has_rerank_weights(embedding_dir(cfg))
     dq = cfg.get("default_quant")
     if not dq:
         return False

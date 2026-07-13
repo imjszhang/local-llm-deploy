@@ -27,8 +27,13 @@ cmd_start() {
         echo "日志: tail -f $LOG_FILE"
         exit 1
     fi
+    if [ -f "$SCRIPT_DIR/.venv/bin/python" ]; then
+        PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+    else
+        PYTHON_BIN="python3"
+    fi
     # 继承当前环境中的 UI_PORT、SERVE_UI_ACCESS_LOG、SERVE_UI_LOG_BODY、API_PROXY_TIMEOUT 等
-    nohup python3 "$SCRIPT_DIR/serve-ui.py" >>"$LOG_FILE" 2>&1 &
+    nohup "$PYTHON_BIN" "$SCRIPT_DIR/serve-ui.py" >>"$LOG_FILE" 2>&1 &
     echo $! >"$PID_FILE"
     echo "已启动 serve-ui（后台 PID $!，端口 ${UI_PORT:-8888}）"
     echo "日志: $LOG_FILE"

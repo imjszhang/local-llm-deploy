@@ -302,6 +302,12 @@ def download_embedding(
 
     print_footer_embedding(target_dir)
     print("")
+    if cfg.get("type") == "rerank":
+        print("使用示例:")
+        print("  ./manage.sh start jina-rerank-mlx")
+        print('  curl -X POST http://127.0.0.1:8006/v1/rerank -H "Content-Type: application/json" \\')
+        print('    -d \'{"model":"jina-reranker-v3","query":"你的问题","documents":["文档1","文档2"]}\'')
+        return
     print("使用示例 (Python):")
     print("  from sentence_transformers import SentenceTransformer")
     print(f'  model = SentenceTransformer("{target_dir}")')
@@ -319,6 +325,11 @@ def print_usage_list(models: dict) -> None:
             ds = cfg.get("download_source") or ""
             tag = f"  default_hub={ds}" if ds else ""
             print(f"  {name:15s} 类型: embedding（safetensors）{tag}")
+            continue
+        if cfg.get("type") == "rerank":
+            ds = cfg.get("download_source") or ""
+            tag = f"  default_hub={ds}" if ds else ""
+            print(f"  {name:15s} 类型: rerank（MLX safetensors）{tag}")
             continue
         if cfg.get("type") == "external":
             print(f"  {name:15s} 类型: external（不可 download）")
@@ -378,9 +389,9 @@ def main() -> None:
             print(hint, file=sys.stderr)
         sys.exit(1)
 
-    if mtype == "embedding":
+    if mtype == "embedding" or mtype == "rerank":
         if args.quant:
-            print("\033[0;31m错误: embedding 模型不支持 --quant\033[0m", file=sys.stderr)
+            print("\033[0;31m错误: embedding/rerank 模型不支持 --quant\033[0m", file=sys.stderr)
             sys.exit(1)
         download_embedding(args.model_name, cfg, src, to_path)
         return

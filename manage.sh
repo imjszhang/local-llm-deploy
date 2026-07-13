@@ -209,6 +209,8 @@ m = data.get('$model', {})
 mt = m.get('type') or 'chat'
 if mt == 'embedding':
     print('safetensors')
+elif mt == 'rerank':
+    print('MLX rerank')
 elif mt == 'external':
     h = m.get('startup_hint') or 'external / ds4-server'
     print(h[:80] + ('…' if len(h) > 80 else ''))
@@ -367,6 +369,41 @@ cmd_start() {
             > "$log_file" 2>&1 &
 
         echo -e "${GREEN}已启动 $model (PID $!, 端口 $emb_port)${NC}"
+        echo "日志: tail -f $log_file"
+    elif [ "$model_type" = "rerank" ]; then
+        local rerank_port rerank_host
+        rerank_port=$(json_model_field "$model" "default_port" 2>/dev/null) || rerank_port="8006"
+        rerank_host="127.0.0.1"
+
+        while [[ $# -gt 0 ]]; do
+            case $1 in
+                --port)  rerank_port="$2"; shift 2 ;;
+                --host)  rerank_host="$2"; shift 2 ;;
+                --lan)   rerank_host="0.0.0.0"; shift ;;
+                *)       shift ;;
+            esac
+        done
+
+        local log_file="$LOGS_DIR/$model.log"
+        echo -e "${BLUE}启动 rerank 服务: $model${NC}"
+
+        if [ -f "$SCRIPT_DIR/.venv-rerank/bin/python" ]; then
+            PYTHON_BIN="$SCRIPT_DIR/.venv-rerank/bin/python"
+        elif [ -f "$SCRIPT_DIR/.venv-embed/bin/python" ]; then
+            PYTHON_BIN="$SCRIPT_DIR/.venv-embed/bin/python"
+        elif [ -f "$SCRIPT_DIR/.venv/bin/python" ]; then
+            PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+        else
+            PYTHON_BIN="${PYTHON_BIN:-$(which python3 2>/dev/null || which python 2>/dev/null)}"
+        fi
+
+        nohup "$PYTHON_BIN" "$SCRIPT_DIR/serve_rerank.py" \
+            --model-name "$model" \
+            --port "$rerank_port" \
+            --host "$rerank_host" \
+            > "$log_file" 2>&1 &
+
+        echo -e "${GREEN}已启动 $model (PID $!, 端口 $rerank_port)${NC}"
         echo "日志: tail -f $log_file"
     else
         exec "$SCRIPT_DIR/deploy.sh" --model-name "$model" "$@"

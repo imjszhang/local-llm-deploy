@@ -33,6 +33,7 @@ import time
 import urllib.parse
 import urllib.request
 import urllib.error
+from http import HTTPStatus
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -811,7 +812,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         elif self.path.startswith("/v1/"):
             self.openai_request("POST")
         else:
-            super().do_POST()
+            self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, "POST not supported for static files")
 
     def resolve_backend(self, api_path):
         """解析 API 路径，返回 (backend_url, remaining_path, model_name)"""
