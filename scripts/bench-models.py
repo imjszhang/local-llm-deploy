@@ -9,6 +9,8 @@
   ./scripts/bench-models.py --backend "ds4|openai|http://127.0.0.1:8005|deepseek-v4-flash"
   ./scripts/bench-models.py --ds4 --ollama qwen3.6:27b-mlx
   ./scripts/bench-models.py --ollama qwen3.6:27b-mlx --rounds 5 --json
+  ./scripts/bench-models.py --thinking --llama ds4flash
+  ./scripts/bench-models.py --thinking --ds4 --rounds 2
 
 环境变量:
   OLLAMA_HOST          Ollama 地址（默认 http://localhost:11434）
@@ -50,6 +52,11 @@ BENCHMARK_CASES = [
         + ("The history of computing spans decades of innovation. " * 80),
         64,
     ),
+]
+
+THINKING_BENCHMARK_CASES = [
+    ("short", "短问题", "Explain what machine learning is in simple terms.", 512),
+    ("reasoning", "推理题", "9.11 and 9.8, which is greater? Explain step by step.", 512),
 ]
 
 
@@ -104,6 +111,43 @@ class CaseSummary:
     @property
     def wall_last(self) -> float:
         return self.runs[-1].wall_s if self.runs else 0.0
+
+
+@dataclass
+class ThinkingRunResult:
+    prefill_tps: float = 0.0
+    prompt_tok: int = 0
+    reasoning_tok: int = 0
+    content_tok: int = 0
+    total_tok: int = 0
+    reasoning_tps: float = 0.0
+    content_tps: float = 0.0
+    total_tps: float = 0.0
+    ttft_reasoning_ms: float = 0.0
+    ttft_content_ms: float = 0.0
+    wall_s: float = 0.0
+    reasoning_pct: float = 0.0
+    no_content: bool = False
+
+
+@dataclass
+class ThinkingCaseSummary:
+    case_id: str
+    case_name: str
+    max_tokens: int
+    runs: list[ThinkingRunResult] = field(default_factory=list)
+
+    @property
+    def reasoning_tps_avg(self) -> float:
+        return statistics.mean(r.reasoning_tps for r in self.runs) if self.runs else 0.0
+
+    @property
+    def content_tps_avg(self) -> float:
+        return statistics.mean(r.content_tps for r in self.runs) if self.runs else 0.0
+
+    @property
+    def total_tps_avg(self) -> float:
+        return statistics.mean(r.total_tps for r in self.runs) if self.runs else 0.0
 
 
 def load_api_key() -> str | None:
@@ -290,7 +334,21 @@ def resolve_external_alias(alias: str) -> Backend | None:
 
 
 def resolve_ds4() -> Backend | None:
-    return resolve_external_alias("ds4flash")
+    b = resolve_external_alias("ds4flash")
+    if b is not None:
+        return b
+    llama = resolve_llama_alias("ds4flash")
+    if llama is None:
+        return None
+    api_model = _fetch_openai_model_id(llama.host, llama.auth) or llama.model
+    return Backend(
+        label=llama.label,
+        kind="openai",
+        host=llama.host,
+        model=api_model,
+        auth=llama.auth,
+        note=llama.note,
+    )
 
 
 def parse_backend_spec(spec: str) -> Backend:
@@ -469,6 +527,99 @@ def bench_openai(backend: Backend, prompt: str, num_predict: int, stream: bool =
     )
 
 
+def bench_thinking(
+    backend: Backend,
+    prompt: str,
+    max_tokens: int,
+    reasoning_effort: str = "high",
+) -> ThinkingRunResult:
+    payload = {
+        "model": backend.model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "stream": True,
+        "temperature": 0,
+        "reasoning_effort": reasoning_effort,
+        "thinking": {"type": "enabled"},
+    }
+    data = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json"}
+    if backend.auth:
+        headers["Authorization"] = f"Bearer {backend.auth}"
+    req = urllib.request.Request(backend.base_url + "/v1/chat/completions", data=data, headers=headers)
+    t0 = time.perf_counter()
+    ttft_reasoning = None
+    ttft_content = None
+    reasoning_chunks = 0
+    content_chunks = 0
+    timings: dict[str, Any] = {}
+
+    resp = urllib.request.urlopen(req, timeout=600)
+    for raw in resp:
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if line == "[DONE]":
+            break
+        try:
+            chunk = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if chunk.get("timings"):
+            timings = chunk["timings"]
+        delta = chunk["choices"][0].get("delta", {})
+        elapsed = time.perf_counter() - t0
+        if delta.get("reasoning_content"):
+            reasoning_chunks += 1
+            if ttft_reasoning is None:
+                ttft_reasoning = elapsed
+        if delta.get("content"):
+            content_chunks += 1
+            if ttft_content is None:
+                ttft_content = elapsed
+
+    wall = time.perf_counter() - t0
+    total_tok = timings.get("predicted_n", reasoning_chunks + content_chunks)
+    if ttft_reasoning is not None and ttft_content is not None and ttft_content > ttft_reasoning:
+        reasoning_dur = ttft_content - ttft_reasoning
+        content_dur = wall - ttft_content
+    elif ttft_reasoning is not None:
+        reasoning_dur = wall - ttft_reasoning
+        content_dur = 0.0
+    else:
+        reasoning_dur = 0.0
+        content_dur = wall - (ttft_content or 0.0)
+
+    reasoning_dur = max(reasoning_dur, 0.001)
+    content_dur = max(content_dur, 0.001)
+
+    reasoning_tok = reasoning_chunks
+    content_tok = content_chunks
+    if reasoning_chunks + content_chunks != total_tok and total_tok:
+        ratio = total_tok / max(reasoning_chunks + content_chunks, 1)
+        reasoning_tok = int(reasoning_chunks * ratio)
+        content_tok = total_tok - reasoning_tok
+
+    gen_start = ttft_reasoning or ttft_content or 0.0
+    return ThinkingRunResult(
+        prefill_tps=timings.get("prompt_per_second", 0),
+        prompt_tok=timings.get("prompt_n", 0),
+        reasoning_tok=reasoning_tok,
+        content_tok=content_tok,
+        total_tok=total_tok,
+        reasoning_tps=reasoning_tok / reasoning_dur if reasoning_tok else 0.0,
+        content_tps=content_tok / content_dur if content_tok else 0.0,
+        total_tps=timings.get("predicted_per_second", 0) or (total_tok / max(wall - gen_start, 0.001)),
+        ttft_reasoning_ms=(ttft_reasoning or 0) * 1000,
+        ttft_content_ms=(ttft_content or 0) * 1000,
+        wall_s=wall,
+        reasoning_pct=reasoning_tok / max(total_tok, 1) * 100,
+        no_content=content_tok == 0,
+    )
+
+
 def bench_once(backend: Backend, prompt: str, num_predict: int, stream: bool = False) -> RunResult:
     if backend.kind == "ollama":
         return bench_ollama(backend, prompt, num_predict, stream=stream)
@@ -505,6 +656,32 @@ def run_backend(backend: Backend, rounds: int, warmup: bool) -> list[CaseSummary
     return summaries
 
 
+def run_thinking_backend(
+    backend: Backend,
+    rounds: int,
+    warmup: bool,
+    reasoning_effort: str,
+) -> list[ThinkingCaseSummary]:
+    if backend.kind not in ("llama", "openai"):
+        raise RuntimeError(f"{backend.label}: thinking 模式需要 OpenAI chat 兼容后端（llama/openai）")
+    if not backend.auth:
+        print(f"  [warn] {backend.label}: 未找到 API key，请求可能返回 401", file=sys.stderr)
+
+    if warmup:
+        try:
+            bench_thinking(backend, "Hello", 32, reasoning_effort=reasoning_effort)
+        except Exception as exc:
+            raise RuntimeError(f"{backend.label} warmup 失败: {exc}") from exc
+
+    summaries: list[ThinkingCaseSummary] = []
+    for case_id, case_name, prompt, max_tokens in THINKING_BENCHMARK_CASES:
+        summary = ThinkingCaseSummary(case_id=case_id, case_name=case_name, max_tokens=max_tokens)
+        for _ in range(rounds):
+            summary.runs.append(bench_thinking(backend, prompt, max_tokens, reasoning_effort=reasoning_effort))
+        summaries.append(summary)
+    return summaries
+
+
 def print_backend_results(backend: Backend, summaries: list[CaseSummary], rounds: int) -> None:
     print(f"\n{'#' * 72}")
     print(f"# {backend.label}")
@@ -526,6 +703,45 @@ def print_backend_results(backend: Backend, summaries: list[CaseSummary], rounds
             print(
                 f"    stream: TTFT={r.ttft_ms:.0f}ms decode={r.decode_tps:.1f} tok/s wall={r.wall_s:.2f}s"
             )
+
+
+def print_thinking_results(
+    backend: Backend,
+    summaries: list[ThinkingCaseSummary],
+    rounds: int,
+    reasoning_effort: str,
+) -> None:
+    print(f"\n{'#' * 72}")
+    print(f"# {backend.label}")
+    if backend.note:
+        print(f"# {backend.note}")
+    print(f"# thinking @ {backend.base_url}/v1/chat/completions  model={backend.model}")
+    print(f"# thinking=enabled, reasoning_effort={reasoning_effort}")
+    print(f"{'#' * 72}")
+    for s in summaries:
+        print(f"\n  [{s.case_name}]  max_tokens={s.max_tokens}, rounds={rounds}")
+        for i, r in enumerate(s.runs, 1):
+            no_content = " (无 content，max_tokens 不足)" if r.no_content else ""
+            print(
+                f"    run{i}: prefill={r.prompt_tok}tok @ {r.prefill_tps:.1f} tok/s\n"
+                f"         reasoning: {r.reasoning_tok}tok ({r.reasoning_pct:.0f}%) @ {r.reasoning_tps:.1f} tok/s  "
+                f"TTFT={r.ttft_reasoning_ms:.0f}ms\n"
+                f"         content  : {r.content_tok}tok ({100 - r.reasoning_pct:.0f}%) @ {r.content_tps:.1f} tok/s  "
+                f"TTFT={r.ttft_content_ms:.0f}ms\n"
+                f"         total    : {r.total_tok}tok @ {r.total_tps:.1f} tok/s  wall={r.wall_s:.1f}s{no_content}"
+            )
+        print(
+            f"  avg: reasoning {s.reasoning_tps_avg:.1f} tok/s | "
+            f"content {s.content_tps_avg:.1f} tok/s | total {s.total_tps_avg:.1f} tok/s"
+        )
+
+    all_runs = [r for s in summaries for r in s.runs]
+    if all_runs:
+        print(f"\n  汇总: reasoning {statistics.mean(r.reasoning_tps for r in all_runs):.1f} tok/s | "
+              f"content {statistics.mean(r.content_tps for r in all_runs):.1f} tok/s | "
+              f"total {statistics.mean(r.total_tps for r in all_runs):.1f} tok/s")
+        print(f"        TTFT(reasoning) {statistics.mean(r.ttft_reasoning_ms for r in all_runs):.0f} ms | "
+              f"TTFT(content) {statistics.mean(r.ttft_content_ms for r in all_runs):.0f} ms")
 
 
 def print_comparison(backends: list[Backend], all_summaries: list[list[CaseSummary]]) -> None:
@@ -598,6 +814,44 @@ def build_report(backends: list[Backend], all_summaries: list[list[CaseSummary]]
                     "wall_last_s": round(s.wall_last, 2),
                     "runs": [asdict(r) for r in s.runs],
                     "stream": asdict(s.stream) if s.stream else None,
+                }
+            )
+        report["backends"].append(entry)
+    return report
+
+
+def build_thinking_report(
+    backends: list[Backend],
+    all_summaries: list[list[ThinkingCaseSummary]],
+    rounds: int,
+    reasoning_effort: str,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "mode": "thinking",
+        "rounds": rounds,
+        "reasoning_effort": reasoning_effort,
+        "cases": [{"id": c[0], "name": c[1], "max_tokens": c[3]} for c in THINKING_BENCHMARK_CASES],
+        "backends": [],
+    }
+    for backend, summaries in zip(backends, all_summaries):
+        entry = {
+            "label": backend.label,
+            "kind": backend.kind,
+            "host": backend.base_url,
+            "model": backend.model,
+            "note": backend.note,
+            "results": [],
+        }
+        for s in summaries:
+            entry["results"].append(
+                {
+                    "case_id": s.case_id,
+                    "case_name": s.case_name,
+                    "max_tokens": s.max_tokens,
+                    "reasoning_tps_avg": round(s.reasoning_tps_avg, 2),
+                    "content_tps_avg": round(s.content_tps_avg, 2),
+                    "total_tps_avg": round(s.total_tps_avg, 2),
+                    "runs": [asdict(r) for r in s.runs],
                 }
             )
         report["backends"].append(entry)
@@ -705,6 +959,29 @@ def collect_backends(args: argparse.Namespace) -> list[Backend]:
     return backends
 
 
+def collect_thinking_backends(args: argparse.Namespace) -> list[Backend]:
+    backends = collect_backends(args)
+    chat_backends: list[Backend] = []
+    for backend in backends:
+        if backend.kind == "ollama":
+            raise SystemExit(f"thinking 模式不支持 Ollama 后端: {backend.label}")
+        if backend.kind == "llama":
+            api_model = _fetch_openai_model_id(backend.host, backend.auth) or backend.model
+            chat_backends.append(
+                Backend(
+                    label=backend.label,
+                    kind="openai",
+                    host=backend.host,
+                    model=api_model,
+                    auth=backend.auth,
+                    note=backend.note,
+                )
+            )
+        else:
+            chat_backends.append(backend)
+    return chat_backends
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="对比 Ollama / llama-server / OpenAI 兼容后端推理速度")
     parser.add_argument("--list", action="store_true", help="列出可用 backend")
@@ -721,15 +998,64 @@ def main() -> int:
     parser.add_argument("--rounds", type=int, default=3, help="每个场景重复次数（默认 3）")
     parser.add_argument("--no-warmup", action="store_true", help="跳过 warmup 请求")
     parser.add_argument("--json", action="store_true", help="输出 JSON 报告")
+    parser.add_argument(
+        "--thinking",
+        action="store_true",
+        help="DeepSeek thinking 模式 benchmark（/v1/chat/completions，分 reasoning/content 测速）",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("high", "max"),
+        default="high",
+        help="thinking 模式强度（默认 high）",
+    )
     args = parser.parse_args()
 
     if args.list:
         return cmd_list(args)
 
-    backends = collect_backends(args)
     rounds = max(1, args.rounds)
     warmup = not args.no_warmup
 
+    if args.thinking:
+        backends = collect_thinking_backends(args)
+        print("=" * 72)
+        print("  Thinking 模式 Benchmark")
+        print("=" * 72)
+        print(f"  backends         : {', '.join(b.label for b in backends)}")
+        print(f"  rounds           : {rounds}")
+        print(f"  warmup           : {warmup}")
+        print(f"  reasoning_effort : {args.reasoning_effort}")
+        print(f"  thinking         : enabled (temperature=0)")
+        print("=" * 72)
+
+        all_summaries: list[list[ThinkingCaseSummary]] = []
+        for backend in backends:
+            try:
+                summaries = run_thinking_backend(
+                    backend,
+                    rounds=rounds,
+                    warmup=warmup,
+                    reasoning_effort=args.reasoning_effort,
+                )
+            except Exception as exc:
+                print(f"\n[ERROR] {backend.label}: {exc}", file=sys.stderr)
+                return 1
+            all_summaries.append(summaries)
+            if not args.json:
+                print_thinking_results(backend, summaries, rounds, args.reasoning_effort)
+
+        if args.json:
+            print(
+                json.dumps(
+                    build_thinking_report(backends, all_summaries, rounds, args.reasoning_effort),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        return 0
+
+    backends = collect_backends(args)
     print("=" * 72)
     print("  模型推理速度 Benchmark")
     print("=" * 72)
