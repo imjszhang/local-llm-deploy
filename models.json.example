@@ -35,6 +35,21 @@
       "default_task": "text-matching"
     }
   },
+  "whisper-large-v3": {
+    "type": "asr",
+    "full_model_name": "Whisper Large V3 (MLX)",
+    "download_source": "huggingface",
+    "repo_id": "mlx-community/whisper-large-v3-mlx",
+    "repo_name": "mlx-community-whisper-large-v3-mlx",
+    "alias": "whisper-large-v3",
+    "default_port": 8007,
+    "download_allow_patterns": ["*.json", "*.npz", "*.safetensors", "*.txt", "tokenizer*"],
+    "params": {
+      "language": "zh",
+      "task": "transcribe",
+      "response_format": "json"
+    }
+  },
   "ds4flash": {
     "type": "external",
     "full_model_name": "DeepSeek V4 Flash (ds4-server)",

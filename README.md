@@ -1,6 +1,6 @@
 # Local LLM Deploy
 
-本地多模型部署，提供 OpenAI 兼容 API。支持 LLM 对话模型（llama.cpp）和 Embedding 向量模型（sentence-transformers），可同时运行多个模型或按需启动。
+本地多模型部署，提供 OpenAI 兼容 API。支持 LLM 对话模型（llama.cpp）、Embedding 向量模型（sentence-transformers）、Rerank 与 Whisper ASR（mlx-whisper），可同时运行多个模型或按需启动。
 
 ## 已支持模型
 
@@ -18,7 +18,13 @@
 |------|----------|------|----------|
 | jina-embeddings-v5-text-small | 8004 | safetensors | ~1.4GB |
 
-新增模型：编辑本地 `models.json`，或使用 `./manage.sh registry merge <补丁.json>` / `registry remove` 等命令。模板见仓库内 `models.json.example`。
+### ASR 模型（Whisper）
+
+| 模型（`manage.sh` 键名） | 默认端口 | 格式 | 磁盘占用 |
+|------|----------|------|----------|
+| `whisper-large-v3` | 8007 | MLX (mlx-whisper) | ~3GB |
+
+新增模型：编辑本地 `models.json`，或使用 `./manage.sh registry merge <补丁.json>` / `registry remove` 等命令。模板见仓库内 `models.json.example`（含 `whisper-large-v3` 示例）。
 
 ## 快速开始
 
@@ -35,13 +41,15 @@ pip install -r requirements.txt
 # 2. 生成本地 models.json（自 models.json.example）
 ./manage.sh registry init
 
-# 3. 下载模型（键名以你 registry 中的为准；示例模板含 example-chat / jina-embed）
+# 3. 下载模型（键名以你 registry 中的为准）
 ./manage.sh download glm-5                  # 对话模型
 ./manage.sh download jina-embed             # Embedding 模型
+./manage.sh download whisper-large-v3       # Whisper ASR（需 ffmpeg + .venv-whisper）
 
 # 4. 启动模型
 ./manage.sh start glm-5                     # 对话模型
 ./manage.sh start jina-embed                # Embedding 模型
+./manage.sh start whisper-large-v3          # ASR 模型
 
 # 5. 查看状态
 ./manage.sh status
@@ -99,6 +107,18 @@ Embedding 接口额外支持：
 - `task` — 切换 LoRA adapter：`text-matching`（默认）、`retrieval`、`classification`、`clustering`
 - `dimensions` — Matryoshka 维度截断（32 ~ 1024）
 
+### ASR（Whisper）
+
+```bash
+curl http://localhost:8888/v1/audio/transcriptions \
+  -H "Authorization: Bearer <你的API-Key>" \
+  -F file=@audio.mp3 \
+  -F model=whisper-large-v3 \
+  -F language=zh
+```
+
+详见 [docs/whisper-guide.md](docs/whisper-guide.md)。
+
 ## 多模型同时运行
 
 ```bash
@@ -125,3 +145,4 @@ cp .api-key.example .api-key
 
 - [DEPLOY.md](DEPLOY.md) — 完整部署指南
 - [docs/architecture.md](docs/architecture.md) — 架构说明
+- [docs/whisper-guide.md](docs/whisper-guide.md) — Whisper ASR 使用指南

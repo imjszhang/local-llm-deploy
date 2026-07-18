@@ -7,6 +7,7 @@ Local LLM Deploy — 前端静态服务 + 多模型 API 代理 + 推理请求队
   /v1/models             → OpenAI 标准模型列表
   /v1/chat/completions   → 按请求体 model 字段路由到对应后端（推荐）
   /v1/embeddings         → 按请求体 model 字段路由到 embedding 后端
+  /v1/audio/transcriptions → 按 multipart model 字段路由到 ASR 后端
   models.json 中 type=external 或 external_backend=true 的条目：若 default_port 可连接则视为运行中（无需 run/*.pid）
   models.json 中 type=ollama 或 Ollama 服务在线时自动注册 /api/tags 中的模型（路由至 OLLAMA_HOST /v1/*）
   /api/models            → 返回运行中的模型列表 + Ollama 聚合状态
@@ -51,6 +52,9 @@ INFERENCE_PATHS = frozenset({
 EMBEDDING_PATHS = frozenset({
     "v1/embeddings", "embeddings",
 })
+ASR_PATHS = frozenset({
+    "v1/audio/transcriptions", "audio/transcriptions",
+})
 MAX_QUEUE_DEPTH = int(os.environ.get("MAX_QUEUE_DEPTH", "5"))
 QUEUE_KEEPALIVE_SEC = int(os.environ.get("QUEUE_KEEPALIVE_SEC", "5"))
 MAX_GLOBAL_CONCURRENT = int(os.environ.get("MAX_GLOBAL_CONCURRENT", "3"))
@@ -72,6 +76,33 @@ _access_log_lock = threading.Lock()
 def _log(msg):
     sys.stderr.write(f"[serve-ui] {msg}\n")
     sys.stderr.flush()
+
+
+def _extract_multipart_field(body, content_type, field_name):
+    """从 multipart/form-data 中提取指定文本字段，失败返回 None。"""
+    if not body or not content_type.lower().startswith("multipart/form-data"):
+        return None
+    try:
+        from email import message_from_bytes
+        from email.policy import HTTP
+
+        header_block = (
+            f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n"
+        ).encode()
+        msg = message_from_bytes(header_block + body, policy=HTTP)
+        if not msg.is_multipart():
+            return None
+        for part in msg.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            if name != field_name:
+                continue
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                return ""
+            return payload.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    return None
 
 
 def _is_client_disconnected(exc):
@@ -877,6 +908,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 "embed", self.path, method, self.client_address[0], model_name,
                 body_summary, full_body, resp_body,
             )
+        elif clean_path in ASR_PATHS and model_name:
+            _log(f"[asr] {self.client_address[0]} → {model_name}")
+            self._forward_request(url, method, body, API_PROXY_TIMEOUT)
         else:
             monitor_paths = ("health", "metrics", "slots")
             timeout = (
@@ -944,6 +978,17 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 "embed", self.path, method, self.client_address[0], model_name,
                 body_summary, full_body, resp_body,
             )
+        elif clean_path in ASR_PATHS:
+            content_type = self.headers.get("Content-Type", "")
+            model_name, backend_url = self._resolve_model_from_multipart(
+                body, content_type, asr_only=True
+            )
+            if not backend_url:
+                self._send_error_safe(503, "No running ASR models")
+                return
+            url = backend_url.rstrip("/") + "/v1/audio/transcriptions"
+            _log(f"[asr] {self.client_address[0]} → {model_name}")
+            self._forward_request(url, method, body, API_PROXY_TIMEOUT)
         else:
             models = get_running_models()
             if models:
@@ -955,10 +1000,11 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             url = backend_url.rstrip("/") + self.path
             self._forward_request(url, method, body, API_PROXY_TIMEOUT)
 
-    def _resolve_model_from_body(self, body, embedding_only=False):
+    def _resolve_model_from_body(self, body, embedding_only=False, asr_only=False):
         """从请求体的 model 字段匹配运行中后端，返回 (model_name, backend_url)。
         匹配顺序：alias 精确匹配 → 短名精确匹配 → 默认第一个。
-        embedding_only=True 时只在 models.json 类型为 embedding 的后端中解析（避免与外部对话后端混淆）。"""
+        embedding_only=True 时只在 models.json 类型为 embedding 的后端中解析。
+        asr_only=True 时只在 type=asr 的后端中解析。"""
         mj = _load_models_json()
         all_models = get_running_models()
         models = {}
@@ -968,8 +1014,11 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             if embedding_only:
                 if typ == "embedding":
                     models[name] = info
+            elif asr_only:
+                if typ == "asr":
+                    models[name] = info
             else:
-                if typ != "embedding":
+                if typ not in ("embedding", "asr"):
                     models[name] = info
         if not models:
             return None, None
@@ -981,6 +1030,19 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             except (json.JSONDecodeError, UnicodeDecodeError):
                 pass
 
+        return self._pick_model_backend(models, requested)
+
+    def _resolve_model_from_multipart(self, body, content_type, asr_only=False):
+        """从 multipart/form-data 中提取 model 字段并匹配 ASR 后端。"""
+        requested = None
+        if body and content_type.lower().startswith("multipart/form-data"):
+            requested = _extract_multipart_field(body, content_type, "model")
+        return self._resolve_model_from_body(
+            json.dumps({"model": requested}).encode("utf-8") if requested else None,
+            asr_only=asr_only,
+        )
+
+    def _pick_model_backend(self, models, requested):
         if requested:
             for name, info in models.items():
                 if info.get("ollama_model") == requested:

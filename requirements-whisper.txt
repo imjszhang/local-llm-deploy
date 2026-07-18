@@ -1,0 +1,10 @@
+mlx>=0.22.0
+mlx-whisper>=0.4.3
+numpy
+scipy
+tiktoken>=0.10
+numba
+more-itertools
+tqdm
+huggingface_hub
+imageio-ffmpeg

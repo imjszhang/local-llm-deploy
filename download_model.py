@@ -308,6 +308,16 @@ def download_embedding(
         print('  curl -X POST http://127.0.0.1:8006/v1/rerank -H "Content-Type: application/json" \\')
         print('    -d \'{"model":"jina-reranker-v3","query":"你的问题","documents":["文档1","文档2"]}\'')
         return
+    if cfg.get("type") == "asr":
+        port = cfg.get("default_port") or 8007
+        alias = cfg.get("alias") or model_name
+        print("使用示例:")
+        print(f"  ./manage.sh start {model_name}")
+        print(
+            f'  curl -X POST http://127.0.0.1:{port}/v1/audio/transcriptions \\'
+        )
+        print(f'    -F file=@audio.mp3 -F model={alias} -F language=zh')
+        return
     print("使用示例 (Python):")
     print("  from sentence_transformers import SentenceTransformer")
     print(f'  model = SentenceTransformer("{target_dir}")')
@@ -330,6 +340,11 @@ def print_usage_list(models: dict) -> None:
             ds = cfg.get("download_source") or ""
             tag = f"  default_hub={ds}" if ds else ""
             print(f"  {name:15s} 类型: rerank（MLX safetensors）{tag}")
+            continue
+        if cfg.get("type") == "asr":
+            ds = cfg.get("download_source") or ""
+            tag = f"  default_hub={ds}" if ds else ""
+            print(f"  {name:15s} 类型: asr（MLX Whisper）{tag}")
             continue
         if cfg.get("type") == "external":
             print(f"  {name:15s} 类型: external（不可 download）")
@@ -389,9 +404,12 @@ def main() -> None:
             print(hint, file=sys.stderr)
         sys.exit(1)
 
-    if mtype == "embedding" or mtype == "rerank":
+    if mtype == "embedding" or mtype == "rerank" or mtype == "asr":
         if args.quant:
-            print("\033[0;31m错误: embedding/rerank 模型不支持 --quant\033[0m", file=sys.stderr)
+            print(
+                "\033[0;31m错误: embedding/rerank/asr 模型不支持 --quant\033[0m",
+                file=sys.stderr,
+            )
             sys.exit(1)
         download_embedding(args.model_name, cfg, src, to_path)
         return

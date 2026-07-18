@@ -211,6 +211,8 @@ if mt == 'embedding':
     print('safetensors')
 elif mt == 'rerank':
     print('MLX rerank')
+elif mt == 'asr':
+    print('MLX ASR')
 elif mt == 'external':
     h = m.get('startup_hint') or 'external / ds4-server'
     print(h[:80] + ('…' if len(h) > 80 else ''))
@@ -404,6 +406,47 @@ cmd_start() {
             > "$log_file" 2>&1 &
 
         echo -e "${GREEN}已启动 $model (PID $!, 端口 $rerank_port)${NC}"
+        echo "日志: tail -f $log_file"
+    elif [ "$model_type" = "asr" ]; then
+        local asr_port asr_host
+        asr_port=$(json_model_field "$model" "default_port" 2>/dev/null) || asr_port="8007"
+        asr_host="127.0.0.1"
+
+        while [[ $# -gt 0 ]]; do
+            case $1 in
+                --port)  asr_port="$2"; shift 2 ;;
+                --host)  asr_host="$2"; shift 2 ;;
+                --lan)   asr_host="0.0.0.0"; shift ;;
+                *)       shift ;;
+            esac
+        done
+
+        local log_file="$LOGS_DIR/$model.log"
+        echo -e "${BLUE}启动 ASR 服务: $model${NC}"
+
+        if [ -f "$SCRIPT_DIR/.venv-whisper/bin/python" ]; then
+            PYTHON_BIN="$SCRIPT_DIR/.venv-whisper/bin/python"
+        elif [ -f "$SCRIPT_DIR/.venv-rerank/bin/python" ]; then
+            PYTHON_BIN="$SCRIPT_DIR/.venv-rerank/bin/python"
+        elif [ -f "$SCRIPT_DIR/.venv-embed/bin/python" ]; then
+            PYTHON_BIN="$SCRIPT_DIR/.venv-embed/bin/python"
+        elif [ -f "$SCRIPT_DIR/.venv/bin/python" ]; then
+            PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+        else
+            PYTHON_BIN="${PYTHON_BIN:-$(which python3 2>/dev/null || which python 2>/dev/null)}"
+        fi
+
+        if [ -x "$SCRIPT_DIR/tools/ffmpeg" ]; then
+            export PATH="$SCRIPT_DIR/tools:$PATH"
+        fi
+
+        nohup "$PYTHON_BIN" "$SCRIPT_DIR/serve_whisper.py" \
+            --model-name "$model" \
+            --port "$asr_port" \
+            --host "$asr_host" \
+            > "$log_file" 2>&1 &
+
+        echo -e "${GREEN}已启动 $model (PID $!, 端口 $asr_port)${NC}"
         echo "日志: tail -f $log_file"
     else
         exec "$SCRIPT_DIR/deploy.sh" --model-name "$model" "$@"

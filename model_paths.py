@@ -107,6 +107,27 @@ def dir_has_rerank_weights(path: str) -> bool:
     return all(os.path.isfile(os.path.join(path, name)) for name in required)
 
 
+def dir_has_asr_weights(path: str) -> bool:
+    """MLX Whisper：config.json + weights.npz 或顶层 .safetensors。"""
+    if not os.path.isdir(path):
+        return False
+    if not os.path.isfile(os.path.join(path, "config.json")):
+        return False
+    if os.path.isfile(os.path.join(path, "weights.npz")):
+        return True
+    try:
+        for fn in os.listdir(path):
+            if fn.endswith(".safetensors") and os.path.isfile(os.path.join(path, fn)):
+                return True
+            if fn.endswith(".npz") and fn != "weights.npz" and os.path.isfile(
+                os.path.join(path, fn)
+            ):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def dir_size_bytes(path: str) -> int:
     if not os.path.isdir(path):
         return 0
@@ -150,6 +171,8 @@ def is_model_downloaded(model_key: str, models: dict[str, Any] | None = None) ->
         return dir_has_embedding_weights(embedding_dir(cfg))
     if mt == "rerank":
         return dir_has_rerank_weights(embedding_dir(cfg))
+    if mt == "asr":
+        return dir_has_asr_weights(embedding_dir(cfg))
     dq = cfg.get("default_quant")
     if not dq:
         return False
