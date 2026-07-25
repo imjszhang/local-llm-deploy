@@ -6,6 +6,9 @@ Local LLM Deploy — 前端静态服务 + 多模型 API 代理 + 推理请求队
 路由规则:
   /v1/models             → OpenAI 标准模型列表
   /v1/chat/completions   → 按请求体 model 字段路由到对应后端（推荐）
+  /v1/completions        → 同上
+  /v1/responses          → 同上（OpenAI Responses / Codex）
+  /v1/messages           → 同上（Anthropic Messages）
   /v1/embeddings         → 按请求体 model 字段路由到 embedding 后端
   /v1/audio/transcriptions → 按 multipart model 字段路由到 ASR 后端
   models.json 中 type=external 或 external_backend=true 的条目：若 default_port 可连接则视为运行中（无需 run/*.pid）
@@ -47,7 +50,9 @@ MONITOR_PROXY_TIMEOUT = int(os.environ.get("MONITOR_PROXY_TIMEOUT", "8"))
 
 INFERENCE_PATHS = frozenset({
     "v1/chat/completions", "v1/completions",
+    "v1/responses", "v1/messages",
     "chat/completions", "completions",
+    "responses", "messages",
 })
 EMBEDDING_PATHS = frozenset({
     "v1/embeddings", "embeddings",
@@ -133,10 +138,19 @@ def _parse_body_summary(body, kind="infer"):
         messages = data.get("messages")
         if isinstance(messages, list):
             summary["n_messages"] = len(messages)
+        inp = data.get("input")
+        if isinstance(inp, list):
+            summary["input_count"] = len(inp)
+        elif isinstance(inp, str):
+            summary["input_len"] = len(inp)
         if "max_tokens" in data:
             summary["max_tokens"] = data["max_tokens"]
+        if "max_output_tokens" in data:
+            summary["max_output_tokens"] = data["max_output_tokens"]
         if "temperature" in data:
             summary["temperature"] = data["temperature"]
+        if "reasoning_effort" in data:
+            summary["reasoning_effort"] = data["reasoning_effort"]
     else:
         inp = data.get("input")
         if isinstance(inp, list):
@@ -220,12 +234,35 @@ def _get_model_params(model_name):
     return {}
 
 
+def _content_chars(content):
+    """Estimate character count from chat/Anthropic/Responses content fields."""
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        total = 0
+        for part in content:
+            if isinstance(part, str):
+                total += len(part)
+            elif isinstance(part, dict):
+                if isinstance(part.get("text"), str):
+                    total += len(part["text"])
+                elif isinstance(part.get("content"), str):
+                    total += len(part["content"])
+                # Responses input items may nest content arrays
+                nested = part.get("content")
+                if isinstance(nested, list):
+                    total += _content_chars(nested)
+        return total
+    return 0
+
+
 def estimate_kv_tokens(body, model_name):
     """Estimate KV token usage from request body.
 
     Returns (estimated_kv, max_tokens_used) where estimated_kv is
     prompt_estimate + max_tokens and max_tokens_used is the generation
     cap taken from the request or model config fallback.
+    Supports chat messages, Anthropic messages, and Responses `input`.
     """
     prompt_chars = 0
     max_tokens = 0
@@ -235,17 +272,36 @@ def estimate_kv_tokens(body, model_name):
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
             data = {}
         if isinstance(data, dict):
-            max_tokens = data.get("max_tokens") or 0
+            max_tokens = (
+                data.get("max_tokens")
+                or data.get("max_output_tokens")
+                or data.get("max_completion_tokens")
+                or 0
+            )
             messages = data.get("messages")
             if isinstance(messages, list):
                 for msg in messages:
-                    content = msg.get("content") if isinstance(msg, dict) else None
-                    if isinstance(content, str):
-                        prompt_chars += len(content)
-                    elif isinstance(content, list):
-                        for part in content:
-                            if isinstance(part, dict) and isinstance(part.get("text"), str):
-                                prompt_chars += len(part["text"])
+                    if not isinstance(msg, dict):
+                        continue
+                    prompt_chars += _content_chars(msg.get("content"))
+                    # Anthropic / chat may carry reasoning_content on replay
+                    prompt_chars += _content_chars(msg.get("reasoning_content"))
+            inp = data.get("input")
+            if isinstance(inp, str):
+                prompt_chars += len(inp)
+            elif isinstance(inp, list):
+                prompt_chars += _content_chars(inp)
+            prompt = data.get("prompt")
+            if isinstance(prompt, str):
+                prompt_chars += len(prompt)
+            instructions = data.get("instructions")
+            if isinstance(instructions, str):
+                prompt_chars += len(instructions)
+            system = data.get("system")
+            if isinstance(system, str):
+                prompt_chars += len(system)
+            elif isinstance(system, list):
+                prompt_chars += _content_chars(system)
     if not max_tokens:
         params = _get_model_params(model_name)
         max_tokens = params.get("n_predict", 32768)
