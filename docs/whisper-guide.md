@@ -145,7 +145,7 @@ curl -X POST http://localhost:8888/api/whisper-large-v3/v1/audio/transcriptions 
 
 ## 七、与现有模型并行
 
-Whisper 占用约 3–8GB 内存，可与 ds4flash、jina-embed 等同时运行：
+Whisper 占用约 3–8GB 内存，可与对话模型、jina-embed 等同时运行：
 
 ```bash
 ./manage.sh start whisper-large-v3

@@ -50,18 +50,19 @@
       "response_format": "json"
     }
   },
-  "ds4flash": {
+  "ds4": {
     "type": "external",
-    "full_model_name": "DeepSeek V4 Flash (ds4-server)",
-    "repo_id": "local/ds4-server",
-    "alias": "deepseek-v4-flash",
+    "full_model_name": "DeepSeek V4 Flash (ds4-server / antirez)",
+    "repo_id": "antirez/deepseek-v4-flash",
+    "alias": "antirez/deepseek-v4-flash",
+    "backend_model": "deepseek-v4-flash",
     "default_port": 8005,
     "external_backend": true,
-    "startup_hint": "在 ds4 仓库执行 scripts/ds4-server-mac-studio-512g.sh（默认 DS4_PORT=8005，模型 DS4_MODEL=ds4flash.gguf）",
+    "startup_hint": "./ds4.sh start  （launchd 常驻，端口 8005，batched-session 4；请设置 DS4_ROOT 指向本地 ds4 仓库）",
     "params": {
-      "ctx_size": 1048576,
+      "ctx_size": 100000,
       "n_predict": 393216,
-      "max_concurrent": 2,
+      "max_concurrent": 4,
       "kv_budget_ratio": 0.85
     }
   }

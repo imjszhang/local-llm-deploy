@@ -542,23 +542,23 @@ def _backend_base_url(info):
 
 
 def _prepare_inference_body(body, model_name):
-    """Rewrite request body for backend-specific model ids (e.g. Ollama tag names)."""
+    """Rewrite request body for backend-specific model ids (Ollama tags / external backend_model)."""
     if not body:
         return body
     models = get_running_models()
     info = models.get(model_name)
-    if not info or not info.get("ollama"):
+    if not info:
         return body
-    ollama_model = info.get("ollama_model")
-    if not ollama_model:
+    target = info.get("ollama_model") or info.get("backend_model")
+    if not target:
         return body
     try:
         data = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
         return body
-    if data.get("model") == ollama_model:
+    if data.get("model") == target:
         return body
-    data["model"] = ollama_model
+    data["model"] = target
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
@@ -590,13 +590,17 @@ def _probe_external_json_models():
         if not _tcp_connect_ok(host, port):
             continue
         alias = cfg.get("alias") or name
-        found[name] = {
+        entry = {
             "pid": None,
             "port": port,
             "model": alias,
             "host": host,
             "external": True,
         }
+        backend_model = cfg.get("backend_model")
+        if backend_model:
+            entry["backend_model"] = backend_model
+        found[name] = entry
 
     _probe_external_json_models._cache = (now, found)
     return found
@@ -1047,6 +1051,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             for name, info in models.items():
                 if info.get("ollama_model") == requested:
                     return name, _backend_base_url(info)
+                if info.get("backend_model") == requested:
+                    return name, _backend_base_url(info)
                 if info.get("model") == requested:
                     return name, _backend_base_url(info)
             if requested in models:
@@ -1440,6 +1446,15 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                         "object": "model",
                         "created": created,
                         "owned_by": "ollama",
+                    }
+                )
+            if info.get("backend_model") and info["backend_model"] != alias:
+                data.append(
+                    {
+                        "id": info["backend_model"],
+                        "object": "model",
+                        "created": created,
+                        "owned_by": "local",
                     }
                 )
             if name != alias:
