@@ -4,13 +4,12 @@
 
 用法:
   ./scripts/bench-models.py --list
-  ./scripts/bench-models.py --ollama qwen3.6:27b-mlx --llama qwen36-27b-aggressive
+  ./scripts/bench-models.py --ollama qwen3.6:27b-mlx --llama qwen3.6:27b-aggressive
   ./scripts/bench-models.py --auto
-  ./scripts/bench-models.py --backend "ds4|openai|http://127.0.0.1:8005|deepseek-v4-flash"
-  ./scripts/bench-models.py --ds4 --ollama qwen3.6:27b-mlx
+  ./scripts/bench-models.py --backend "local|openai|http://127.0.0.1:8002|qwen3.6:27b-aggressive"
   ./scripts/bench-models.py --ollama qwen3.6:27b-mlx --rounds 5 --json
-  ./scripts/bench-models.py --thinking --llama ds4flash
-  ./scripts/bench-models.py --thinking --ds4 --rounds 2
+  ./scripts/bench-models.py --thinking --llama qwen3.6:27b-aggressive
+  ./scripts/bench-models.py --thinking --llama qwen3.6:27b-aggressive --rounds 2
 
 环境变量:
   OLLAMA_HOST          Ollama 地址（默认 http://localhost:11434）
@@ -333,26 +332,8 @@ def resolve_external_alias(alias: str) -> Backend | None:
     )
 
 
-def resolve_ds4() -> Backend | None:
-    b = resolve_external_alias("ds4flash")
-    if b is not None:
-        return b
-    llama = resolve_llama_alias("ds4flash")
-    if llama is None:
-        return None
-    api_model = _fetch_openai_model_id(llama.host, llama.auth) or llama.model
-    return Backend(
-        label=llama.label,
-        kind="openai",
-        host=llama.host,
-        model=api_model,
-        auth=llama.auth,
-        note=llama.note,
-    )
-
-
 def parse_backend_spec(spec: str) -> Backend:
-    """格式: label|kind|host|model  例如 ds4|openai|http://127.0.0.1:8005|deepseek-v4-flash"""
+    """格式: label|kind|host|model  例如 local|openai|http://127.0.0.1:8002|qwen3.6:27b-aggressive"""
     parts = spec.split("|", 3)
     if len(parts) != 4:
         raise ValueError(f"无效 --backend 格式: {spec!r}，应为 label|kind|host|model")
@@ -928,12 +909,6 @@ def collect_backends(args: argparse.Namespace) -> list[Backend]:
             raise SystemExit("--auto: 未发现任何运行中的 backend")
         return backends
 
-    if args.ds4:
-        b = resolve_ds4()
-        if b is None:
-            raise SystemExit("ds4flash 未运行（端口 8005 不可达）")
-        add(b)
-
     for model in args.ollama or []:
         add(
             Backend(
@@ -955,7 +930,7 @@ def collect_backends(args: argparse.Namespace) -> list[Backend]:
         add(parse_backend_spec(spec))
 
     if not backends:
-        raise SystemExit("请指定 --ollama、--llama、--ds4、--backend 或 --auto")
+        raise SystemExit("请指定 --ollama、--llama、--backend 或 --auto")
     return backends
 
 
@@ -988,7 +963,6 @@ def main() -> int:
     parser.add_argument("--auto", action="store_true", help="自动发现所有运行中的 backend")
     parser.add_argument("--ollama", action="append", metavar="MODEL", help="Ollama 模型名，可重复")
     parser.add_argument("--llama", action="append", metavar="ALIAS", help="models.json alias 或 run/*.pid 名，可重复")
-    parser.add_argument("--ds4", action="store_true", help="benchmark ds4flash（端口 8005，OpenAI /v1/completions）")
     parser.add_argument(
         "--backend",
         action="append",
