@@ -359,6 +359,13 @@ cmd_start() {
             esac
         done
 
+        if [ -x "$SCRIPT_DIR/jina.sh" ]; then
+            echo -e "${BLUE}启动 embedding 服务 (launchd): $model${NC}"
+            JINA_MODEL_NAME="$model" JINA_HOST="$emb_host" JINA_EMBED_PORT="$emb_port" \
+                "$SCRIPT_DIR/jina.sh" embed start
+            return
+        fi
+
         local log_file="$LOGS_DIR/$model.log"
         echo -e "${BLUE}启动 embedding 服务: $model${NC}"
 
@@ -391,6 +398,13 @@ cmd_start() {
                 *)       shift ;;
             esac
         done
+
+        if [ -x "$SCRIPT_DIR/jina.sh" ]; then
+            echo -e "${BLUE}启动 rerank 服务 (launchd): $model${NC}"
+            JINA_MODEL_NAME="$model" JINA_HOST="$rerank_host" JINA_RERANK_PORT="$rerank_port" \
+                "$SCRIPT_DIR/jina.sh" rerank start
+            return
+        fi
 
         local log_file="$LOGS_DIR/$model.log"
         echo -e "${BLUE}启动 rerank 服务: $model${NC}"
@@ -426,6 +440,14 @@ cmd_start() {
                 *)       shift ;;
             esac
         done
+
+        # Whisper 默认走 launchd 常驻（与 serve-ui / ds4 一致）
+        if [ -x "$SCRIPT_DIR/whisper.sh" ]; then
+            echo -e "${BLUE}启动 ASR 服务 (launchd): $model${NC}"
+            WHISPER_MODEL_NAME="$model" WHISPER_HOST="$asr_host" WHISPER_PORT="$asr_port" \
+                "$SCRIPT_DIR/whisper.sh" start
+            return
+        fi
 
         local log_file="$LOGS_DIR/$model.log"
         echo -e "${BLUE}启动 ASR 服务: $model${NC}"
@@ -465,6 +487,32 @@ cmd_stop() {
     if [ "$target" = "--all" ]; then
         local stopped=false
         for model in $(json_list_models); do
+            local mt=""
+            mt=$(json_model_field "$model" "type" 2>/dev/null) || mt=""
+            if [ "$mt" = "asr" ] && [ -x "$SCRIPT_DIR/whisper.sh" ]; then
+                if "$SCRIPT_DIR/whisper.sh" status 2>/dev/null | grep -q "running"; then
+                    echo -e "${YELLOW}停止 $model (launchd)...${NC}"
+                    WHISPER_MODEL_NAME="$model" "$SCRIPT_DIR/whisper.sh" stop || true
+                    stopped=true
+                fi
+                continue
+            fi
+            if [ "$mt" = "embedding" ] && [ -x "$SCRIPT_DIR/jina.sh" ]; then
+                if "$SCRIPT_DIR/jina.sh" embed status 2>/dev/null | grep -q "running"; then
+                    echo -e "${YELLOW}停止 $model (launchd)...${NC}"
+                    "$SCRIPT_DIR/jina.sh" embed stop || true
+                    stopped=true
+                fi
+                continue
+            fi
+            if [ "$mt" = "rerank" ] && [ -x "$SCRIPT_DIR/jina.sh" ]; then
+                if "$SCRIPT_DIR/jina.sh" rerank status 2>/dev/null | grep -q "running"; then
+                    echo -e "${YELLOW}停止 $model (launchd)...${NC}"
+                    "$SCRIPT_DIR/jina.sh" rerank stop || true
+                    stopped=true
+                fi
+                continue
+            fi
             if is_running "$model"; then
                 local pid
                 pid=$(get_running_pid "$model")
@@ -485,6 +533,21 @@ cmd_stop() {
     if [ -z "$target" ]; then
         echo -e "${RED}用法: $0 stop <模型名> 或 $0 stop --all${NC}"
         exit 1
+    fi
+
+    local target_type=""
+    target_type=$(json_model_field "$target" "type" 2>/dev/null) || target_type=""
+    if [ "$target_type" = "asr" ] && [ -x "$SCRIPT_DIR/whisper.sh" ]; then
+        WHISPER_MODEL_NAME="$target" "$SCRIPT_DIR/whisper.sh" stop
+        return
+    fi
+    if [ "$target_type" = "embedding" ] && [ -x "$SCRIPT_DIR/jina.sh" ]; then
+        "$SCRIPT_DIR/jina.sh" embed stop
+        return
+    fi
+    if [ "$target_type" = "rerank" ] && [ -x "$SCRIPT_DIR/jina.sh" ]; then
+        "$SCRIPT_DIR/jina.sh" rerank stop
+        return
     fi
 
     if ! is_running "$target"; then

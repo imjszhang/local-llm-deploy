@@ -88,12 +88,15 @@ pip install 'tiktoken>=0.10' --only-binary=:all:
 ## 五、启动服务
 
 ```bash
-./manage.sh start whisper-large-v3
+./manage.sh start whisper-large-v3   # 默认经 whisper.sh → launchd 常驻
 ./manage.sh status
+./whisper.sh status                  # launchd / 端口就绪
 ```
 
 - 使用 `serve_whisper.py`，默认 **127.0.0.1:8007**
-- venv 优先级：`.venv-whisper` → `.venv-rerank` → `.venv-embed` → `.venv`
+- 默认通过 LaunchAgent `com.local-llm-deploy.whisper` 常驻（不依赖 Terminal / Cursor 会话）
+- 也可直接：`./whisper.sh start|stop|status`
+- venv：`.venv-whisper`（见 `scripts/start-whisper.sh`）
 - 日志：`logs/whisper-large-v3.log`
 - 首次启动会预热加载模型（约数秒）
 
