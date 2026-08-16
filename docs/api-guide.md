@@ -212,18 +212,26 @@ GET  /api/health
 
 ## 五、推理队列与限流
 
-- **串行推理**：同一模型的推理请求在服务端**按模型串行**执行，避免互相取消。
-- **排队**：当该模型正在处理请求时，新请求会进入队列；排队期间：
+仅对走 **serve-ui `:8888`** 的请求生效。直连 Ollama `:11434` 或 ds4 `:8005` 没有这层保护。
+
+- **对话快车道**：所有对话模型（Qwen / ds4 / llama 等）**合计同时只跑 1 路 decode**，避免统一内存带宽被打满、所有人一起变慢。第二路进队，而不是并行抢带宽。
+- **流式优先**：排队时流式对话优先于非流式，避免交互被批量请求堵住。
+- **embed / ASR 分门**：embeddings 与 transcriptions 走独立辅门，不占对话槽。
+- **排队**：对话占槽时，新对话请求进入队列：
   - **流式请求**：会定期收到 SSE `: keepalive`，避免连接超时。
   - **非流式请求**：阻塞等待，直到轮到自己或超时。
-- **队列满**：若排队数达到上限，返回 **429**，并带 `Retry-After: 30`，客户端应稍后重试。
-- **排队超时**：非流式请求在队列中等待过久会返回 **504 队列等待超时**。
+- **队列满**：若该模型「在跑+在等」达到上限，返回 **429**，并带 `Retry-After: 30`，客户端应稍后重试。
+- **排队超时**：非流式请求在队列中等待过久会返回 **504**。
 
 **环境变量（可选）：**
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `MAX_QUEUE_DEPTH` | 5 | 单模型最大排队数量 |
+| `CHAT_LANE_CONCURRENT` | 1 | 对话快车道同时放行路数（跨模型共享） |
+| `MAX_GLOBAL_CONCURRENT` | （未设置） | 旧变量；仅当未设 `CHAT_LANE_CONCURRENT` 时作为对话车道覆盖 |
+| `EMBED_LANE_CONCURRENT` | 2 | embed 辅门同时放行路数 |
+| `ASR_LANE_CONCURRENT` | 1 | ASR 辅门同时放行路数 |
+| `MAX_QUEUE_DEPTH` | 5 | 单模型（对话）或单辅门最大排队数量 |
 | `QUEUE_KEEPALIVE_SEC` | 5 | 流式排队时 SSE keepalive 间隔（秒） |
 | `API_PROXY_TIMEOUT` | 3600 | 转发到后端的超时时间（秒） |
 
@@ -286,7 +294,11 @@ print(r.choices[0].message.content)
 | `LLAMA_PORT` | 8001 | 无运行中模型时，/api/* 默认转发端口 |
 | `API_PROXY_TIMEOUT` | 3600 | 代理请求超时（秒） |
 | `MONITOR_PROXY_TIMEOUT` | 8 | health/metrics/slots 等监控接口超时（秒） |
-| `MAX_QUEUE_DEPTH` | 5 | 单模型最大排队数 |
+| `CHAT_LANE_CONCURRENT` | 1 | 对话快车道同时放行路数 |
+| `MAX_GLOBAL_CONCURRENT` | （未设置） | 旧变量，可覆盖对话车道 |
+| `EMBED_LANE_CONCURRENT` | 2 | embed 辅门并发 |
+| `ASR_LANE_CONCURRENT` | 1 | ASR 辅门并发 |
+| `MAX_QUEUE_DEPTH` | 5 | 单模型 / 辅门最大排队数 |
 | `QUEUE_KEEPALIVE_SEC` | 5 | 流式排队 SSE keepalive 间隔（秒） |
 
 ---

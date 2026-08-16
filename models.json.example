@@ -18,7 +18,7 @@
       "ctx_size": 8192,
       "n_predict": 4096,
       "repeat_penalty": 1.0,
-      "max_concurrent": 2,
+      "max_concurrent": 1,
       "kv_budget_ratio": 0.9,
       "extra_args": []
     }
@@ -62,7 +62,7 @@
     "params": {
       "ctx_size": 100000,
       "n_predict": 393216,
-      "max_concurrent": 4,
+      "max_concurrent": 1,
       "kv_budget_ratio": 0.85
     }
   }

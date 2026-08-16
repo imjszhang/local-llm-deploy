@@ -37,7 +37,7 @@ Local LLM Deploy 采用**多实例部署架构**：聊天模型每个运行一�
 │  │  serve-ui.py (前端 + API 代理)  端口: 8888                    │ │
 │  │  /v1/models, /v1/chat/completions, /v1/embeddings, /v1/audio/transcriptions (OpenAI 兼容，按 model 路由) │
 │  │  /api/models → 运行中模型列表（含队列状态）                    │ │
-│  │  /api/<model>/* → 路由到对应后端  推理队列：按模型串行，可选 .api-key │
+│  │  /api/<model>/* → 路由到对应后端  对话快车道互斥 + embed/ASR 分门   │
 │  └──────────────────────────────────────────────────────────────┘ │
 │  ┌──────────────────────────────────────────────────────────────┐ │
 │  │  models.json (模型注册中心)   manage.sh (list/download/start/stop/status/logs) │
@@ -72,7 +72,7 @@ OpenAI Client / curl ← JSON 或 SSE 流 ←
 
 浏览器 → serve-ui(:8888) → 静态页 (monitor.html, chat.html 等)
                           → /api/models → 运行中模型列表与队列状态
-                          → /v1/chat/completions 等 → 后端（推理队列按模型串行）
+                          → /v1/chat/completions 等 → 后端（对话跨模型互斥 1 路）
 ```
 
 ---

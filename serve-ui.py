@@ -19,9 +19,10 @@ Local LLM Deploy — 前端静态服务 + 多模型 API 代理 + 推理请求队
   /api/<model-name>/*    → 代理到该模型对应的后端端口
   /api/*                 → 代理到默认（第一个运行中的）后端
 
-推理请求队列（KV 预算感知）:
-  每模型按 KV token 预算控制并发（短请求可多路并行，长请求自动串行）。
-  全局跨模型并发上限防止统一内存带宽被打满。
+推理请求队列（分车道 + KV 预算）:
+  对话模型共享 1 条 decode 快车道（跨 Qwen/ds4/llama 互斥），避免统一内存带宽被打满。
+  embed / ASR 走独立辅门，不占对话槽。
+  每模型仍按 KV token 预算控制；流式对话优先于非流式。
   排队期间对流式请求发送 SSE keepalive 保持连接。
 """
 import errno
@@ -62,7 +63,19 @@ ASR_PATHS = frozenset({
 })
 MAX_QUEUE_DEPTH = int(os.environ.get("MAX_QUEUE_DEPTH", "5"))
 QUEUE_KEEPALIVE_SEC = int(os.environ.get("QUEUE_KEEPALIVE_SEC", "5"))
-MAX_GLOBAL_CONCURRENT = int(os.environ.get("MAX_GLOBAL_CONCURRENT", "3"))
+_chat_lane_raw = os.environ.get("CHAT_LANE_CONCURRENT")
+_legacy_global = os.environ.get("MAX_GLOBAL_CONCURRENT")
+if _chat_lane_raw is not None:
+    CHAT_LANE_CONCURRENT = max(1, int(_chat_lane_raw))
+elif _legacy_global is not None:
+    CHAT_LANE_CONCURRENT = max(1, int(_legacy_global))
+else:
+    CHAT_LANE_CONCURRENT = 1
+MAX_GLOBAL_CONCURRENT = CHAT_LANE_CONCURRENT
+EMBED_LANE_CONCURRENT = max(1, int(os.environ.get("EMBED_LANE_CONCURRENT", "2")))
+ASR_LANE_CONCURRENT = max(1, int(os.environ.get("ASR_LANE_CONCURRENT", "1")))
+LANE_PRIO_STREAM = 1
+LANE_PRIO_BATCH = 0
 KV_CHARS_PER_TOKEN = float(os.environ.get("KV_CHARS_PER_TOKEN", "2.5"))
 MODELS_JSON = os.path.join(SCRIPT_DIR, "models.json")
 EXTERNAL_BACKEND_PROBE_TTL = float(os.environ.get("EXTERNAL_BACKEND_PROBE_TTL", "2"))
@@ -813,50 +826,126 @@ class ModelBudgetGate:
             }
 
 
-class GlobalBudgetGate:
-    """Cross-model global concurrency limiter."""
+class LaneGate:
+    """Named concurrency lane with optional stream-priority waiters."""
 
-    def __init__(self, max_concurrent):
-        self._semaphore = threading.Semaphore(max(1, max_concurrent))
+    def __init__(self, name, max_concurrent):
+        self.name = name
         self._max = max(1, max_concurrent)
-        self._lock = threading.Lock()
+        self._condition = threading.Condition()
         self._active = 0
+        self._seq = 0
+        self._waiters = []
+        self._entered = 0
 
     @property
     def active(self):
-        return self._active
+        with self._condition:
+            return self._active
 
     @property
     def max_concurrent(self):
         return self._max
 
-    def acquire(self, timeout=None):
-        ok = self._semaphore.acquire(timeout=timeout)
-        if ok:
-            with self._lock:
-                self._active += 1
-        return ok
+    @property
+    def queue_depth(self):
+        with self._condition:
+            return self._entered
 
-    def acquire_nonblocking(self):
-        ok = self._semaphore.acquire(blocking=False)
-        if ok:
-            with self._lock:
+    def enter_queue(self):
+        with self._condition:
+            if self._entered >= MAX_QUEUE_DEPTH:
+                return False
+            self._entered += 1
+            return True
+
+    def leave_queue(self):
+        with self._condition:
+            self._entered = max(0, self._entered - 1)
+
+    def _best_waiter(self):
+        if not self._waiters:
+            return None
+        return max(self._waiters, key=lambda w: (w["prio"], -w["seq"]))
+
+    def acquire_nonblocking(self, priority=LANE_PRIO_BATCH):
+        del priority
+        with self._condition:
+            if self._waiters or self._active >= self._max:
+                return False
+            self._active += 1
+            return True
+
+    def acquire(self, timeout=None, priority=LANE_PRIO_BATCH):
+        with self._condition:
+            if not self._waiters and self._active < self._max:
                 self._active += 1
-        return ok
+                return True
+            if timeout is not None and timeout <= 0:
+                return False
+            self._seq += 1
+            waiter = {"prio": priority, "seq": self._seq, "granted": False}
+            self._waiters.append(waiter)
+            deadline = (time.monotonic() + timeout) if timeout else None
+            try:
+                while True:
+                    remaining = None
+                    if deadline is not None:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            if waiter.get("granted"):
+                                return True
+                            self._waiters.remove(waiter)
+                            return False
+                    self._condition.wait(timeout=remaining)
+                    if waiter.get("granted"):
+                        return True
+            finally:
+                if waiter in self._waiters and not waiter.get("granted"):
+                    self._waiters.remove(waiter)
 
     def release(self):
-        with self._lock:
+        with self._condition:
             self._active = max(0, self._active - 1)
-        self._semaphore.release()
+            nxt = self._best_waiter()
+            if nxt is not None and self._active < self._max:
+                self._waiters.remove(nxt)
+                self._active += 1
+                nxt["granted"] = True
+            self._condition.notify_all()
 
     def snapshot(self):
-        with self._lock:
-            return {"active": self._active, "max": self._max}
+        with self._condition:
+            return {
+                "active": self._active,
+                "max": self._max,
+                "waiting": len(self._waiters),
+                "queue_depth": self._entered,
+            }
 
 
 _gates_lock = threading.Lock()
 _inference_gates: dict = {}
-_global_gate = GlobalBudgetGate(MAX_GLOBAL_CONCURRENT)
+_chat_lane = LaneGate("chat", CHAT_LANE_CONCURRENT)
+_embed_lane = LaneGate("embed", EMBED_LANE_CONCURRENT)
+_asr_lane = LaneGate("asr", ASR_LANE_CONCURRENT)
+
+
+def get_chat_lane():
+    return _chat_lane
+
+
+def get_embed_lane():
+    return _embed_lane
+
+
+def get_asr_lane():
+    return _asr_lane
+
+
+def get_global_gate():
+    """Backward-compatible alias for the exclusive chat lane."""
+    return _chat_lane
 
 
 def get_inference_gate(model_name):
@@ -871,10 +960,6 @@ def get_inference_gate(model_name):
                 max_slots=max_slots, kv_budget_ratio=kv_ratio,
             )
         return _inference_gates[model_name]
-
-
-def get_global_gate():
-    return _global_gate
 
 
 # ── HTTP Handler ──────────────────────────────────────────────
@@ -958,19 +1043,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         if clean_path in INFERENCE_PATHS and model_name:
             self._gated_inference(url, method, body, model_name)
         elif clean_path in EMBEDDING_PATHS and model_name:
-            body_summary = _parse_body_summary(body, "embed")
-            full_body = body.decode("utf-8", errors="replace") if (LOG_BODY and body) else None
-            _log_request_summary("embed", self.path, method, self.client_address[0], model_name, body_summary, full_body)
-            _log(f"[embed] {self.client_address[0]} → {model_name}")
-            capture = bool(ACCESS_LOG_FILE)
-            resp_body = self._forward_request(url, method, body, API_PROXY_TIMEOUT, capture_response=capture)
-            _log_request_and_response(
-                "embed", self.path, method, self.client_address[0], model_name,
-                body_summary, full_body, resp_body,
-            )
+            self._gated_aux(get_embed_lane(), url, method, body, model_name, kind="embed")
         elif clean_path in ASR_PATHS and model_name:
-            _log(f"[asr] {self.client_address[0]} → {model_name}")
-            self._forward_request(url, method, body, API_PROXY_TIMEOUT)
+            self._gated_aux(get_asr_lane(), url, method, body, model_name, kind="asr")
         else:
             monitor_paths = ("health", "metrics", "slots")
             timeout = (
@@ -1028,16 +1103,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 self._send_error_safe(503, "No running embedding models")
                 return
             url = backend_url.rstrip("/") + "/v1/embeddings"
-            body_summary = _parse_body_summary(body, "embed")
-            full_body = body.decode("utf-8", errors="replace") if (LOG_BODY and body) else None
-            _log_request_summary("embed", self.path, method, self.client_address[0], model_name, body_summary, full_body)
-            _log(f"[embed] {self.client_address[0]} → {model_name}")
-            capture = bool(ACCESS_LOG_FILE)
-            resp_body = self._forward_request(url, method, body, API_PROXY_TIMEOUT, capture_response=capture)
-            _log_request_and_response(
-                "embed", self.path, method, self.client_address[0], model_name,
-                body_summary, full_body, resp_body,
-            )
+            self._gated_aux(get_embed_lane(), url, method, body, model_name, kind="embed")
         elif clean_path in ASR_PATHS:
             content_type = self.headers.get("Content-Type", "")
             model_name, backend_url = self._resolve_model_from_multipart(
@@ -1047,8 +1113,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 self._send_error_safe(503, "No running ASR models")
                 return
             url = backend_url.rstrip("/") + "/v1/audio/transcriptions"
-            _log(f"[asr] {self.client_address[0]} → {model_name}")
-            self._forward_request(url, method, body, API_PROXY_TIMEOUT)
+            self._gated_aux(get_asr_lane(), url, method, body, model_name, kind="asr")
         else:
             models = get_running_models()
             if models:
@@ -1123,22 +1188,65 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
     # ── 推理门控 ──
 
+    def _send_queue_full(self, message="推理队列已满，请稍后重试"):
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Retry-After", "30")
+        self.end_headers()
+        err = json.dumps(
+            {"error": {"message": message, "type": "server_error"}},
+            ensure_ascii=False,
+        )
+        self.wfile.write(err.encode("utf-8"))
+
+    def _gated_aux(self, lane, url, method, body, model_name, kind="embed"):
+        """embed / ASR 辅门：不占对话槽，不算 KV。"""
+        client_ip = self.client_address[0]
+        if not lane.enter_queue():
+            self._send_queue_full(f"{kind} 队列已满，请稍后重试")
+            return
+
+        body_summary = _parse_body_summary(body, kind) if kind == "embed" else {}
+        full_body = body.decode("utf-8", errors="replace") if (LOG_BODY and body) else None
+        if kind == "embed":
+            _log_request_summary("embed", self.path, method, client_ip, model_name, body_summary, full_body)
+        _log(f"[{kind}] {client_ip} → {model_name}")
+        t0 = time.monotonic()
+        try:
+            if not lane.acquire_nonblocking():
+                _log(f"[queue] {client_ip} 排队等待 {kind} lane (depth={lane.queue_depth})")
+                if not lane.acquire(timeout=API_PROXY_TIMEOUT, priority=LANE_PRIO_BATCH):
+                    self.send_response(504)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    err = json.dumps(
+                        {"error": {"message": f"{kind} 队列等待超时", "type": "server_error"}},
+                        ensure_ascii=False,
+                    )
+                    self.wfile.write(err.encode("utf-8"))
+                    return
+            try:
+                capture = bool(ACCESS_LOG_FILE) and kind == "embed"
+                resp_body = self._forward_request(url, method, body, API_PROXY_TIMEOUT, capture_response=capture)
+                if kind == "embed":
+                    _log_request_and_response(
+                        "embed", self.path, method, client_ip, model_name,
+                        body_summary, full_body, resp_body,
+                    )
+            finally:
+                lane.release()
+                _log(f"[{kind}] {client_ip} → {model_name} done ({time.monotonic() - t0:.1f}s)")
+        finally:
+            lane.leave_queue()
+
     def _gated_inference(self, url, method, body, model_name):
         gate = get_inference_gate(model_name)
-        g_gate = get_global_gate()
+        lane = get_chat_lane()
         client_ip = self.client_address[0]
         body = _prepare_inference_body(body, model_name)
 
         if not gate.enter_queue():
-            self.send_response(429)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Retry-After", "30")
-            self.end_headers()
-            err = json.dumps(
-                {"error": {"message": "推理队列已满，请稍后重试", "type": "server_error"}},
-                ensure_ascii=False,
-            )
-            self.wfile.write(err.encode("utf-8"))
+            self._send_queue_full()
             return
 
         body_summary = _parse_body_summary(body, "infer")
@@ -1153,19 +1261,20 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 is_stream = json.loads(body).get("stream", False)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 pass
+        prio = LANE_PRIO_STREAM if is_stream else LANE_PRIO_BATCH
 
         t0 = time.monotonic()
         try:
-            # Fast path: try both gates non-blocking
-            got_global = g_gate.acquire_nonblocking()
-            got_model = got_global and gate.acquire_nonblocking(est_kv)
+            got_lane = lane.acquire_nonblocking(priority=prio)
+            got_model = got_lane and gate.acquire_nonblocking(est_kv)
 
-            if got_global and got_model:
+            if got_lane and got_model:
                 snap = gate.budget_snapshot()
                 _log(
                     f"[budget] {client_ip} → {model_name} "
                     f"est={est_kv} used={snap['used']}/{snap['total']} "
-                    f"slots={snap['active_slots']}/{snap['max_slots']} → ALLOW"
+                    f"slots={snap['active_slots']}/{snap['max_slots']} "
+                    f"chat={lane.snapshot()['active']}/{lane.max_concurrent} → ALLOW"
                 )
                 try:
                     _log(f"[infer] {client_ip} → {model_name}")
@@ -1181,17 +1290,16 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     )
                 finally:
                     gate.release(est_kv)
-                    g_gate.release()
+                    lane.release()
                     _log(
                         f"[infer] {client_ip} → {model_name} "
                         f"done ({time.monotonic() - t0:.1f}s)"
                     )
                 return
 
-            if got_global:
-                g_gate.release()
+            if got_lane:
+                lane.release()
 
-            # Slow path: queue wait
             snap = gate.budget_snapshot()
             _log(
                 f"[budget] {client_ip} → {model_name} "
@@ -1200,13 +1308,13 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             )
             _log(
                 f"[queue] {client_ip} 排队等待 {model_name} "
-                f"(depth={gate.queue_depth})"
+                f"(depth={gate.queue_depth} chat_waiting={lane.snapshot()['waiting']})"
             )
 
             if is_stream:
-                self._queued_stream(gate, g_gate, est_kv, url, method, body, client_ip, model_name, body_summary, full_body)
+                self._queued_stream(gate, lane, est_kv, url, method, body, client_ip, model_name, body_summary, full_body, prio)
             else:
-                self._queued_block(gate, g_gate, est_kv, url, method, body, client_ip, model_name, body_summary, full_body)
+                self._queued_block(gate, lane, est_kv, url, method, body, client_ip, model_name, body_summary, full_body, prio)
 
             _log(
                 f"[infer] {client_ip} → {model_name} "
@@ -1215,26 +1323,25 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         finally:
             gate.leave_queue()
 
-    def _queued_stream(self, gate, g_gate, est_kv, url, method, body,
-                       client_ip, model_name, body_summary=None, full_body=None):
+    def _queued_stream(self, gate, lane, est_kv, url, method, body,
+                       client_ip, model_name, body_summary=None, full_body=None,
+                       priority=LANE_PRIO_STREAM):
         """Streaming request: send headers + keepalive while queued, then relay."""
         self._send_stream_headers()
 
-        # Wait for model gate (with keepalive)
-        while not gate.acquire(est_kv, timeout=QUEUE_KEEPALIVE_SEC):
+        while not lane.acquire(timeout=QUEUE_KEEPALIVE_SEC, priority=priority):
             try:
                 self._write_chunk(b": keepalive\n\n")
             except (BrokenPipeError, ConnectionResetError, OSError):
                 _log(f"[queue] {client_ip} 断开，取消排队 {model_name}")
                 return
 
-        # Got model gate; now acquire global (with keepalive)
-        while not g_gate.acquire(timeout=QUEUE_KEEPALIVE_SEC):
+        while not gate.acquire(est_kv, timeout=QUEUE_KEEPALIVE_SEC):
             try:
                 self._write_chunk(b": keepalive\n\n")
             except (BrokenPipeError, ConnectionResetError, OSError):
                 _log(f"[queue] {client_ip} 断开，取消排队 {model_name}")
-                gate.release(est_kv)
+                lane.release()
                 return
 
         try:
@@ -1247,29 +1354,30 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             )
         finally:
             gate.release(est_kv)
-            g_gate.release()
+            lane.release()
 
-    def _queued_block(self, gate, g_gate, est_kv, url, method, body,
-                      client_ip, model_name, body_summary=None, full_body=None):
-        """Non-streaming request: block until budget available."""
-        if not gate.acquire(est_kv, timeout=API_PROXY_TIMEOUT):
+    def _queued_block(self, gate, lane, est_kv, url, method, body,
+                      client_ip, model_name, body_summary=None, full_body=None,
+                      priority=LANE_PRIO_BATCH):
+        """Non-streaming request: block until chat lane + KV budget available."""
+        if not lane.acquire(timeout=API_PROXY_TIMEOUT, priority=priority):
             self.send_response(504)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             err = json.dumps(
-                {"error": {"message": "队列等待超时", "type": "server_error"}},
+                {"error": {"message": "对话车道等待超时", "type": "server_error"}},
                 ensure_ascii=False,
             )
             self.wfile.write(err.encode("utf-8"))
             return
 
-        if not g_gate.acquire(timeout=API_PROXY_TIMEOUT):
-            gate.release(est_kv)
+        if not gate.acquire(est_kv, timeout=API_PROXY_TIMEOUT):
+            lane.release()
             self.send_response(504)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             err = json.dumps(
-                {"error": {"message": "全局队列等待超时", "type": "server_error"}},
+                {"error": {"message": "队列等待超时", "type": "server_error"}},
                 ensure_ascii=False,
             )
             self.wfile.write(err.encode("utf-8"))
@@ -1285,7 +1393,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             )
         finally:
             gate.release(est_kv)
-            g_gate.release()
+            lane.release()
 
     # ── 转发与保活 ──
 
@@ -1559,12 +1667,17 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             if gate:
                 entry["budget"] = gate.budget_snapshot()
             result.append(entry)
-        g_snap = get_global_gate().snapshot()
+        lanes = {
+            "chat": get_chat_lane().snapshot(),
+            "embed": get_embed_lane().snapshot(),
+            "asr": get_asr_lane().snapshot(),
+        }
         ollama = get_ollama_status()
         payload = {
             "models": result,
             "ollama": ollama,
-            "global": g_snap,
+            "lanes": lanes,
+            "global": lanes["chat"],
         }
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
@@ -1606,7 +1719,10 @@ def main():
     print()
     print(f"OpenAI 兼容: http://localhost:{port}/v1  (通过 model 字段自动路由)")
     print(f"推理队列: 最大排队 {MAX_QUEUE_DEPTH}，保活间隔 {QUEUE_KEEPALIVE_SEC}s")
-    print(f"全局并发上限: {MAX_GLOBAL_CONCURRENT}，KV 粗算系数: {KV_CHARS_PER_TOKEN} chars/tok")
+    print(
+        f"车道: chat={CHAT_LANE_CONCURRENT} embed={EMBED_LANE_CONCURRENT} "
+        f"asr={ASR_LANE_CONCURRENT}（对话跨模型互斥；KV 粗算 {KV_CHARS_PER_TOKEN} chars/tok）"
+    )
     if models:
         for name in models:
             g = get_inference_gate(name)
