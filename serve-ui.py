@@ -61,7 +61,7 @@ EMBEDDING_PATHS = frozenset({
 ASR_PATHS = frozenset({
     "v1/audio/transcriptions", "audio/transcriptions",
 })
-MAX_QUEUE_DEPTH = int(os.environ.get("MAX_QUEUE_DEPTH", "5"))
+MAX_QUEUE_DEPTH = int(os.environ.get("MAX_QUEUE_DEPTH", "12"))
 QUEUE_KEEPALIVE_SEC = int(os.environ.get("QUEUE_KEEPALIVE_SEC", "5"))
 _chat_lane_raw = os.environ.get("CHAT_LANE_CONCURRENT")
 _legacy_global = os.environ.get("MAX_GLOBAL_CONCURRENT")

@@ -231,7 +231,7 @@ GET  /api/health
 | `MAX_GLOBAL_CONCURRENT` | （未设置） | 旧变量；仅当未设 `CHAT_LANE_CONCURRENT` 时作为对话车道覆盖 |
 | `EMBED_LANE_CONCURRENT` | 2 | embed 辅门同时放行路数 |
 | `ASR_LANE_CONCURRENT` | 1 | ASR 辅门同时放行路数 |
-| `MAX_QUEUE_DEPTH` | 5 | 单模型（对话）或单辅门最大排队数量 |
+| `MAX_QUEUE_DEPTH` | 12 | 单模型（对话）或单辅门最大排队数量 |
 | `QUEUE_KEEPALIVE_SEC` | 5 | 流式排队时 SSE keepalive 间隔（秒） |
 | `API_PROXY_TIMEOUT` | 3600 | 转发到后端的超时时间（秒） |
 
@@ -298,7 +298,7 @@ print(r.choices[0].message.content)
 | `MAX_GLOBAL_CONCURRENT` | （未设置） | 旧变量，可覆盖对话车道 |
 | `EMBED_LANE_CONCURRENT` | 2 | embed 辅门并发 |
 | `ASR_LANE_CONCURRENT` | 1 | ASR 辅门并发 |
-| `MAX_QUEUE_DEPTH` | 5 | 单模型 / 辅门最大排队数 |
+| `MAX_QUEUE_DEPTH` | 12 | 单模型 / 辅门最大排队数 |
 | `QUEUE_KEEPALIVE_SEC` | 5 | 流式排队 SSE keepalive 间隔（秒） |
 
 ---
