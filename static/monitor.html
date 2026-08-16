@@ -598,9 +598,13 @@
 
     function renderLlamaSection() {
         const models = modelsData.models || [];
-        const g = modelsData.global || {};
+        const lanes = modelsData.lanes || {};
+        const chat = lanes.chat || modelsData.global || {};
+        const embed = lanes.embed || {};
+        const asr = lanes.asr || {};
         document.getElementById('llamaCount').textContent = models.length + ' 个模型';
-        document.getElementById('globalGate').textContent = `并发 ${g.active||0}/${g.max||'-'}`;
+        document.getElementById('globalGate').textContent =
+            `对话 ${chat.active||0}/${chat.max||'-'} · embed ${embed.active||0}/${embed.max||'-'} · asr ${asr.active||0}/${asr.max||'-'}`;
 
         const grid = document.getElementById('llamaGrid');
         if (!models.length) {
