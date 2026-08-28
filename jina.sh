@@ -68,7 +68,7 @@ data = {
     },
     "StandardOutPath": log_file,
     "StandardErrorPath": log_file,
-    "RunAtLoad": False,
+    "RunAtLoad": True,
     # launchd 会在异常退出后重启；stop 通过 bootout 明确卸载。
     "KeepAlive": {"SuccessfulExit": False},
     "ProcessType": "Interactive",

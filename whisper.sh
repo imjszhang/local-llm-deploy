@@ -93,7 +93,7 @@ data = {
     },
     "StandardOutPath": log_file,
     "StandardErrorPath": log_file,
-    "RunAtLoad": False,
+    "RunAtLoad": True,
     "KeepAlive": False,
 }
 

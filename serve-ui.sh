@@ -88,7 +88,7 @@ data = {
     "WorkingDirectory": script_dir,
     "StandardOutPath": log_file,
     "StandardErrorPath": log_file,
-    "RunAtLoad": False,
+    "RunAtLoad": True,
     "KeepAlive": False,
 }
 if env:
