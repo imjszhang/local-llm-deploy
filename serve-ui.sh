@@ -60,12 +60,13 @@ write_plist() {
     mkdir -p "$HOME/Library/LaunchAgents"
 
     python3 - "$PLIST" "$python_bin_path" "$SCRIPT_DIR" "$LOG_FILE" "$UI_PORT" \
-        "$SERVE_UI_ACCESS_LOG" "$SERVE_UI_LOG_BODY" "$API_PROXY_TIMEOUT" "$OLLAMA_HOST" <<'PY'
+        "$SERVE_UI_ACCESS_LOG" "$SERVE_UI_LOG_BODY" "$API_PROXY_TIMEOUT" "$OLLAMA_HOST" \
+        "$KNOWLEDGE_COLLECTOR_URL" <<'PY'
 import plistlib
 import sys
 from pathlib import Path
 
-plist_path, python_bin, script_dir, log_file, ui_port, access_log, log_body, proxy_timeout, ollama_host = sys.argv[1:10]
+plist_path, python_bin, script_dir, log_file, ui_port, access_log, log_body, proxy_timeout, ollama_host, knowledge_url = sys.argv[1:11]
 
 env = {}
 if ui_port:
@@ -78,6 +79,8 @@ if proxy_timeout:
     env["API_PROXY_TIMEOUT"] = proxy_timeout
 if ollama_host:
     env["OLLAMA_HOST"] = ollama_host
+if knowledge_url:
+    env["KNOWLEDGE_COLLECTOR_URL"] = knowledge_url
 
 data = {
     "Label": "com.local-llm-deploy.serve-ui",

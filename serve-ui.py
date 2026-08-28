@@ -18,6 +18,8 @@ Local LLM Deploy — 前端静态服务 + 多模型 API 代理 + 推理请求队
   /api/ollama/*          → 代理到 Ollama HTTP API
   /api/<model-name>/*    → 代理到该模型对应的后端端口
   /api/*                 → 代理到默认（第一个运行中的）后端
+  /knowledge             → 301 /knowledge/
+  /knowledge/*           → 反代到 KNOWLEDGE_COLLECTOR_URL（默认 OpenClaw 网关 /plugins/js-knowledge）
 
 推理请求队列（分车道 + KV 预算）:
   对话模型共享 1 条 decode 快车道（跨 Qwen/ds4/llama 互斥），避免统一内存带宽被打满。
@@ -87,6 +89,12 @@ OLLAMA_AUTO_DISCOVER = os.environ.get("OLLAMA_AUTO_DISCOVER", "1").strip().lower
 )
 SYSTEM_CACHE_TTL = 3
 OLLAMA_CACHE_TTL = 5
+KNOWLEDGE_COLLECTOR_URL = os.environ.get(
+    "KNOWLEDGE_COLLECTOR_URL",
+    "http://127.0.0.1:18789/plugins/js-knowledge",
+).rstrip("/")
+KNOWLEDGE_PROXY_TIMEOUT = int(os.environ.get("KNOWLEDGE_PROXY_TIMEOUT", "30"))
+KNOWLEDGE_PREFIX = "/knowledge"
 
 _access_log_lock = threading.Lock()
 
@@ -962,6 +970,38 @@ def get_inference_gate(model_name):
         return _inference_gates[model_name]
 
 
+def _knowledge_pathname(path):
+    return path.split("?", 1)[0]
+
+
+def is_knowledge_path(path):
+    pathname = _knowledge_pathname(path)
+    return pathname == KNOWLEDGE_PREFIX or pathname.startswith(KNOWLEDGE_PREFIX + "/")
+
+
+def knowledge_redirect_location(path):
+    query = ""
+    if "?" in path:
+        query = "?" + path.split("?", 1)[1]
+    return KNOWLEDGE_PREFIX + "/" + query
+
+
+def knowledge_backend_url(path, base_url=None):
+    """Map /knowledge/... to the collector origin. Returns None for exact /knowledge (needs 301)."""
+    origin = (base_url or KNOWLEDGE_COLLECTOR_URL).rstrip("/")
+    if "?" in path:
+        pathname, query = path.split("?", 1)
+        query = "?" + query
+    else:
+        pathname, query = path, ""
+    if pathname == KNOWLEDGE_PREFIX:
+        return None
+    rest = pathname[len(KNOWLEDGE_PREFIX):]
+    if not rest:
+        rest = "/"
+    return origin + rest + query
+
+
 # ── HTTP Handler ──────────────────────────────────────────────
 
 
@@ -974,7 +1014,14 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
+    def do_HEAD(self):
+        if self._maybe_knowledge("HEAD"):
+            return
+        super().do_HEAD()
+
     def do_GET(self):
+        if self._maybe_knowledge("GET"):
+            return
         if self.path.startswith("/api/"):
             self.proxy_request("GET")
         elif self.path.startswith("/v1/"):
@@ -983,12 +1030,113 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self):
+        if self._maybe_knowledge("POST"):
+            return
         if self.path.startswith("/api/"):
             self.proxy_request("POST")
         elif self.path.startswith("/v1/"):
             self.openai_request("POST")
         else:
             self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, "POST not supported for static files")
+
+    def do_DELETE(self):
+        if self._maybe_knowledge("DELETE"):
+            return
+        self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, "DELETE not supported")
+
+    def do_OPTIONS(self):
+        if self._maybe_knowledge("OPTIONS"):
+            return
+        self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, "OPTIONS not supported")
+
+    def _maybe_knowledge(self, method):
+        if not is_knowledge_path(self.path):
+            return False
+        if _knowledge_pathname(self.path) == KNOWLEDGE_PREFIX:
+            self.send_response(301)
+            self.send_header("Location", knowledge_redirect_location(self.path))
+            self.end_headers()
+            return True
+        self.knowledge_proxy(method)
+        return True
+
+    def knowledge_proxy(self, method):
+        url = knowledge_backend_url(self.path)
+        body = None
+        if method in ("POST", "PUT", "PATCH", "DELETE"):
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_len) if content_len else None
+        self._forward_knowledge(url, method, body)
+
+    def _forward_knowledge(self, url, method, body):
+        """Proxy to the knowledge collector without injecting the LLM .api-key."""
+        headers = {}
+        skip = {
+            "host",
+            "connection",
+            "content-length",
+            "authorization",
+            "transfer-encoding",
+        }
+        for k, v in self.headers.items():
+            if k.lower() not in skip:
+                headers[k] = v
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers, method=method)
+            if body:
+                req.add_header(
+                    "Content-Type",
+                    self.headers.get("Content-Type", "application/json"),
+                )
+            with urllib.request.urlopen(req, timeout=KNOWLEDGE_PROXY_TIMEOUT) as resp:
+                payload = resp.read()
+                self.send_response(resp.status)
+                for k, v in resp.headers.items():
+                    if k.lower() not in (
+                        "transfer-encoding",
+                        "content-length",
+                        "connection",
+                    ):
+                        self.send_header(k, v)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                if method != "HEAD":
+                    self.wfile.write(payload)
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read()
+                self.send_response(e.code)
+                ctype = e.headers.get("Content-Type", "application/json") if e.headers else "application/json"
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(err_body)))
+                self.end_headers()
+                self.wfile.write(err_body)
+            except (BrokenPipeError, ConnectionResetError, OSError) as w:
+                if not _is_client_disconnected(w):
+                    raise
+        except urllib.error.URLError as e:
+            try:
+                msg = json.dumps(
+                    {
+                        "error": "knowledge collector is not running",
+                        "message": f"知识库未启动（{KNOWLEDGE_COLLECTOR_URL}）",
+                        "detail": str(e.reason) if getattr(e, "reason", None) else str(e),
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(msg)))
+                self.end_headers()
+                self.wfile.write(msg)
+            except (BrokenPipeError, ConnectionResetError, OSError) as w:
+                if not _is_client_disconnected(w):
+                    raise
+        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+            if not _is_client_disconnected(e):
+                raise
+        except Exception as e:
+            self._send_error_safe(502, str(e))
 
     def resolve_backend(self, api_path):
         """解析 API 路径，返回 (backend_url, remaining_path, model_name)"""
@@ -1718,6 +1866,7 @@ def main():
         )
     print()
     print(f"OpenAI 兼容: http://localhost:{port}/v1  (通过 model 字段自动路由)")
+    print(f"知识库: /knowledge/ → {KNOWLEDGE_COLLECTOR_URL}")
     print(f"推理队列: 最大排队 {MAX_QUEUE_DEPTH}，保活间隔 {QUEUE_KEEPALIVE_SEC}s")
     print(
         f"车道: chat={CHAT_LANE_CONCURRENT} embed={EMBED_LANE_CONCURRENT} "

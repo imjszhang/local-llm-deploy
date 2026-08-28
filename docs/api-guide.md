@@ -36,6 +36,7 @@ curl -H "Authorization: Bearer YOUR_API_KEY" http://localhost:8888/v1/models
 |------|----------|------|
 | **OpenAI 兼容** | `/v1/*` | 推荐：通过请求体 `model` 字段自动路由到对应后端 |
 | **代理路由** | `/api/*` | 通过 URL 路径指定模型或使用默认后端 |
+| **知识库反代** | `/knowledge/` | 浏览器知识库 UI 与 `/knowledge/api/v1/*`；转发到 `KNOWLEDGE_COLLECTOR_URL`（默认 `http://127.0.0.1:18789/plugins/js-knowledge`），不是模型 API |
 
 ---
 

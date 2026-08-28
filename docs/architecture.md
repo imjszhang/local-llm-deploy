@@ -38,6 +38,7 @@ Local LLM Deploy 采用**多实例部署架构**：聊天模型每个运行一�
 │  │  /v1/models, /v1/chat/completions, /v1/embeddings, /v1/audio/transcriptions (OpenAI 兼容，按 model 路由) │
 │  │  /api/models → 运行中模型列表（含队列状态）                    │ │
 │  │  /api/<model>/* → 路由到对应后端  对话快车道互斥 + embed/ASR 分门   │
+│  │  /knowledge/* → 知识库反代（KNOWLEDGE_COLLECTOR_URL，非模型 API） │
 │  └──────────────────────────────────────────────────────────────┘ │
 │  ┌──────────────────────────────────────────────────────────────┐ │
 │  │  models.json (模型注册中心)   manage.sh (list/download/start/stop/status/logs) │
@@ -54,7 +55,7 @@ Local LLM Deploy 采用**多实例部署架构**：聊天模型每个运行一�
 | **llama-server** (每聊天模型一个) | 由 models.json 的 default_port 配置 | C++ 推理引擎，OpenAI 兼容 API，加载 GGUF |
 | **serve_embedding.py** | 默认 8004 | Embedding 服务（如 jina-embeddings-v5），OpenAI 兼容 /v1/embeddings |
 | **serve_whisper.py** | 默认 8007 | ASR 服务（mlx-whisper），OpenAI 兼容 /v1/audio/transcriptions |
-| **serve-ui.py** | 8888 (UI_PORT) | 前端静态服务 + 多模型 API 代理 + 推理队列；支持 /v1/* 与 /api/* |
+| **serve-ui.py** | 8888 (UI_PORT) | 前端静态服务 + 多模型 API 代理 + 推理队列；支持 /v1/*、/api/*，以及 /knowledge/ 知识库反代 |
 | **manage.sh** | - | 统一 CLI：list / download / start / stop / status / logs |
 
 ---
@@ -73,6 +74,7 @@ OpenAI Client / curl ← JSON 或 SSE 流 ←
 浏览器 → serve-ui(:8888) → 静态页 (monitor.html, chat.html 等)
                           → /api/models → 运行中模型列表与队列状态
                           → /v1/chat/completions 等 → 后端（对话跨模型互斥 1 路）
+                          → /knowledge/ → 反代本机 OpenClaw 知识库（默认 127.0.0.1:18789/plugins/js-knowledge）
 ```
 
 ---
