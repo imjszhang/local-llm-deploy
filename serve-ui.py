@@ -1069,13 +1069,16 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         self._forward_knowledge(url, method, body)
 
     def _forward_knowledge(self, url, method, body):
-        """Proxy to the knowledge collector without injecting the LLM .api-key."""
+        """Proxy to the knowledge collector.
+
+        Forwards the client's Authorization (knowledge API_TOKEN) but does not
+        inject serve-ui's LLM .api-key.
+        """
         headers = {}
         skip = {
             "host",
             "connection",
             "content-length",
-            "authorization",
             "transfer-encoding",
         }
         for k, v in self.headers.items():
