@@ -2,6 +2,11 @@
 .venv/
 .venv-embed/
 .venv-rerank/
+.venv*/
+*.egg-info/
+build/
+dist/
+.ruff_cache/
 __pycache__/
 *.pyc
 
@@ -18,6 +23,9 @@ api-keys.txt
 .env.*
 .hf-env
 models.json
+models.json.lock
+engines.json
+engines.json.lock
 
 *.key
 *.pem

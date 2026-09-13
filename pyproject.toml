@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-llm-deploy"
+version = "0.2.0"
+description = "Local model lifecycle management and inference gateway"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+download = ["huggingface_hub>=0.20", "hf_transfer>=0.1", "modelscope>=1.10"]
+embedding = ["torch>=2.2", "transformers>=4.40", "peft>=0.10", "numpy>=1.24", "safetensors>=0.4"]
+rerank = ["mlx>=0.22", "mlx-lm>=0.22", "numpy>=1.24", "safetensors>=0.4", "huggingface_hub>=0.20"]
+whisper = ["mlx-whisper>=0.4.3", "imageio-ffmpeg>=0.5"]
+dev = ["ruff>=0.9"]
+
+[project.scripts]
+local-llm = "local_llm_deploy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
