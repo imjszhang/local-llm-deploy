@@ -8,15 +8,15 @@
 
 | 模型（`manage.sh` 键名） | 完整型号 / 说明 | 默认端口 | 默认量化 | 磁盘占用 |
 |------|----------|----------|----------|----------|
-| `glm-5` | GLM-5 | 8001 | UD-IQ2_XXS (2-bit) | ~241GB |
-| `qwen3.5` | **Qwen3.5-397B-A17B**（Unsloth GGUF：`unsloth/Qwen3.5-397B-A17B-GGUF`） | 8002 | MXFP4_MOE (4-bit) | ~214GB |
-| `minimax` | MiniMax-M2.5 | 8003 | BF16 | ~457GB |
+| `qwen3.8-27b-aggressive` | Qwen3.8-27B Uncensored HauhauCS Aggressive（GGUF，需较新 llama.cpp） | 8002 | Q5_K_P | ~20GB |
+| `qwen3.8:27b-mlx` | Qwen3.8 27B（Ollama MLX） | 11434 | nvfp4 | ~18GB |
 
-### Embedding 模型
+### Embedding / Rerank 模型
 
 | 模型 | 默认端口 | 格式 | 磁盘占用 |
 |------|----------|------|----------|
 | jina-embeddings-v5-text-small | 8004 | safetensors | ~1.4GB |
+| jina-reranker-v3-mlx | 8006 | MLX | ~1.4GB |
 
 ### ASR 模型（Whisper）
 
@@ -42,12 +42,13 @@ pip install -r requirements.txt
 ./manage.sh registry init
 
 # 3. 下载模型（键名以你 registry 中的为准）
-./manage.sh download glm-5                  # 对话模型
+./manage.sh download qwen3.8-27b-aggressive # 对话模型（Q5 GGUF，走 hf-mirror）
 ./manage.sh download jina-embed             # Embedding 模型
 ./manage.sh download whisper-large-v3       # Whisper ASR（需 ffmpeg + .venv-whisper）
 
 # 4. 启动模型
-./manage.sh start glm-5                     # 对话模型
+# Qwen3.8 需要 2026-08 之后的 llama.cpp；旧树跑不了
+CPP_DIR="$PWD/work_dir/llama.cpp-qwen38" ./manage.sh start qwen3.8-27b-aggressive
 ./manage.sh start jina-embed                # Embedding 模型
 ./manage.sh start whisper-large-v3          # ASR 模型
 
@@ -91,7 +92,7 @@ pip install -r requirements.txt
 curl http://localhost:8888/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <你的API-Key>" \
-  -d '{"model":"unsloth/GLM-5","messages":[{"role":"user","content":"你好"}]}'
+  -d '{"model":"qwen3.8-27b-aggressive","messages":[{"role":"user","content":"你好"}]}'
 ```
 
 ### Embedding
@@ -122,9 +123,9 @@ curl http://localhost:8888/v1/audio/transcriptions \
 ## 多模型同时运行
 
 ```bash
-./manage.sh start glm-5                     # 对话，端口 8001
-./manage.sh start qwen3.5                   # Qwen3.5-397B-A17B，端口 8002
+CPP_DIR="$PWD/work_dir/llama.cpp-qwen38" ./manage.sh start qwen3.8-27b-aggressive  # 对话，端口 8002
 ./manage.sh start jina-embed                # Embedding，端口 8004
+./manage.sh start jina-rerank-mlx           # Rerank，端口 8006
 
 ./manage.sh status                          # 查看所有实例
 ./manage.sh stop --all                      # 停止全部

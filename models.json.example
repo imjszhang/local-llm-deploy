@@ -23,6 +23,64 @@
       "extra_args": []
     }
   },
+  "qwen3.8-27b-aggressive": {
+    "full_model_name": "Qwen3.8-27B Uncensored HauhauCS Aggressive (Q5_K_P GGUF)",
+    "repo_id": "HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF",
+    "repo_name": "HauhauCS-Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF",
+    "download_source": "huggingface",
+    "default_quant": "Q5_K_P",
+    "alias": "qwen3.8-27b-aggressive",
+    "default_port": 8002,
+    "quants": {
+      "Q5_K_P": {
+        "pattern": "*Q5_K_P.gguf",
+        "size_gb": 20.22
+      }
+    },
+    "params": {
+      "temp": 0.7,
+      "top_p": 0.8,
+      "ctx_size": 8192,
+      "n_predict": 4096,
+      "repeat_penalty": 1.0,
+      "max_concurrent": 1,
+      "kv_budget_ratio": 0.9,
+      "extra_args": [
+        "--jinja",
+        "--top-k",
+        "20",
+        "--presence-penalty",
+        "1.5",
+        "--fit",
+        "off",
+        "--n-gpu-layers",
+        "999",
+        "--device",
+        "MTL0",
+        "--flash-attn",
+        "on",
+        "--reasoning",
+        "off",
+        "--no-reasoning-preserve",
+        "--chat-template-kwargs",
+        "{\"enable_thinking\":false}"
+      ]
+    }
+  },
+  "qwen3.8:27b-mlx": {
+    "type": "ollama",
+    "full_model_name": "Qwen3.8 27B (Ollama MLX)",
+    "ollama_model": "qwen3.8:27b-mlx",
+    "alias": "qwen3.8:27b-mlx",
+    "default_port": 11434,
+    "startup_hint": "由 Ollama 提供；安装: ollama pull qwen3.8:27b-mlx",
+    "params": {
+      "ctx_size": 262144,
+      "n_predict": 32768,
+      "max_concurrent": 1,
+      "kv_budget_ratio": 0.9
+    }
+  },
   "jina-embed": {
     "type": "embedding",
     "download_source": "modelscope",
@@ -33,6 +91,17 @@
     "params": {
       "dimensions": 1024,
       "default_task": "text-matching"
+    }
+  },
+  "jina-rerank-mlx": {
+    "type": "rerank",
+    "repo_id": "jinaai/jina-reranker-v3-mlx",
+    "repo_name": "jinaai-jina-reranker-v3-mlx",
+    "download_source": "huggingface",
+    "alias": "jina-reranker-v3",
+    "default_port": 8006,
+    "params": {
+      "max_documents": 64
     }
   },
   "whisper-large-v3": {
