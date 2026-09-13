@@ -1,4 +1,4 @@
-import type { ModelDetail, MonitorModel, Snapshot } from '../../src/api/types'
+import type { ModelDetail, MonitorModel, Snapshot } from '../../src/features/monitor/api/types'
 export function sampleModel(key = 'chat'): MonitorModel {
   return { key, alias: key, backend: 'llama_cpp', backend_model: null, capabilities: ['chat'], registered: true,
     management: 'process', port: 8001, lifecycle: { state: 'running', reason: null },

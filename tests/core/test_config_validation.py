@@ -87,6 +87,65 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(spec.raw['params']['n_predict'], -1)
         self.assertEqual(spec.raw['runtime']['keep_alive'], {'SuccessfulExit': False})
 
+    def test_chat_controls_declaration_is_explicit_and_preserved(self):
+        controls = {'thinking': True, 'reasoning_efforts': ['low', 'medium', 'xhigh'],
+                    'reasoning_budget': True, 'default_thinking': False, 'default_effort': 'xhigh'}
+        spec = normalize_models({'model': {'chat_controls': controls}})['model']
+        self.assertEqual(spec.raw['chat_controls'], controls)
+        self.assertIsNot(spec.raw['chat_controls'], controls)
+        self.assertNotIn('chat_controls', normalize_models({'model': {}})['model'].raw)
+        unknown_defaults = {**controls, 'reasoning_efforts': [], 'default_effort': None, 'default_thinking': None}
+        self.assertEqual(normalize_models({'model': {'chat_controls': unknown_defaults}})['model'].raw['chat_controls'],
+                         unknown_defaults)
+        efforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'custom_level', 'level-2']
+        extended = {**controls, 'reasoning_efforts': efforts}
+        self.assertEqual(normalize_models({'model': {'chat_controls': extended}})['model'].raw['chat_controls'], extended)
+
+    def test_chat_controls_reject_invalid_shapes_and_ambiguous_values(self):
+        valid = {'thinking': True, 'reasoning_efforts': ['low', 'medium', 'xhigh'],
+                 'reasoning_budget': True, 'default_thinking': False, 'default_effort': 'xhigh'}
+        for value in (None, [], False, 2, 'text', {}, {**valid, 'secret': 'value'}):
+            with self.subTest(value=value):
+                self.assert_invalid({'chat_controls': value})
+        for field in valid:
+            missing = {key: value for key, value in valid.items() if key != field}
+            with self.subTest(missing=field):
+                self.assert_invalid({'chat_controls': missing})
+        for field in ('thinking', 'reasoning_budget'):
+            for value in (None, 0, 1, 'true', [], {}):
+                with self.subTest(field=field, value=value):
+                    self.assert_invalid({'chat_controls': {**valid, field: value}})
+        for value in (0, 1, 'false', [], {}):
+            with self.subTest(default_thinking=value):
+                self.assert_invalid({'chat_controls': {**valid, 'default_thinking': value}})
+        for value in (None, 'low', {}, False, [None], [False], [{}], [['low']], ['low', 'low'],
+                      ['none'], [''], [' high'], ['HIGH'], ['low\n'], ['a' * 25], list('abcdefghi')):
+            with self.subTest(reasoning_efforts=value):
+                self.assert_invalid({'chat_controls': {**valid, 'reasoning_efforts': value, 'default_effort': None}})
+        for value in (True, 0, [], {}, '', 'high', 'none'):
+            with self.subTest(default_effort=value):
+                self.assert_invalid({'chat_controls': {**valid, 'default_effort': value}})
+
+    def test_ollama_rejects_reasoning_token_budget_declaration(self):
+        controls = {'thinking': True, 'reasoning_efforts': [], 'reasoning_budget': True,
+                    'default_thinking': None, 'default_effort': None}
+        for backend_config in ({'type': 'ollama'}, {'backend': 'ollama'}):
+            self.assert_invalid({**backend_config, 'chat_controls': controls})
+            spec = normalize_models({'model': {**backend_config,
+                                    'chat_controls': {**controls, 'reasoning_budget': False}}})['model']
+            self.assertFalse(spec.raw['chat_controls']['reasoning_budget'])
+
+    def test_disabled_thinking_controls_cannot_claim_active_dependents(self):
+        controls = {'thinking': False, 'reasoning_efforts': [], 'reasoning_budget': False,
+                    'default_thinking': None, 'default_effort': None}
+        for overrides in ({'reasoning_efforts': ['low']}, {'reasoning_budget': True},
+                          {'default_thinking': True}, {'reasoning_efforts': ['low'], 'default_effort': 'low'}):
+            with self.subTest(overrides=overrides):
+                self.assert_invalid({'chat_controls': {**controls, **overrides}})
+        for default in (None, False):
+            declared = {**controls, 'default_thinking': default}
+            self.assertEqual(normalize_models({'model': {'chat_controls': declared}})['model'].raw['chat_controls'], declared)
+
     def test_invalid_identity_json_reports_error_and_retains_cached_registry(self):
         with tempfile.TemporaryDirectory() as temporary:
             paths = ProjectPaths(Path(temporary))

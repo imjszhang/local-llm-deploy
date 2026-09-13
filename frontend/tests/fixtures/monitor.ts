@@ -1,4 +1,4 @@
-import type { ModelDetail, MonitorModel, Snapshot, SourceState } from '../../src/api/types'
+import type { ModelDetail, MonitorModel, Snapshot, SourceState } from '../../src/features/monitor/api/types'
 
 export function source(now = Date.now()): SourceState {
   return { last_attempt_at: now, last_success_at: now, stale_after_ms: 15000, stale: false, error: null }
@@ -34,6 +34,7 @@ export function createSnapshot(now = Date.now()): Snapshot {
     models: [
       model('qwen3.8-27b', 'Qwen 3.8 · 27B', 'llama_cpp', ['chat'], {
         activity: { active: 1, waiting: 2, uncertain: false, scope: 'gateway' }, budget: { used: 65536, total: 188744 },
+        chat_controls: { thinking: true, reasoning_efforts: ['low', 'medium', 'xhigh'], reasoning_budget: true, default_thinking: false, default_effort: 'xhigh', source: 'configured' },
       }),
       model('jina-embed', 'Jina Embeddings v3', 'transformers_embedding', ['embedding'], {
         management: 'launchd', port: 8004, activity: { active: 1, waiting: 0, uncertain: false, scope: 'gateway' },
@@ -47,6 +48,7 @@ export function createSnapshot(now = Date.now()): Snapshot {
       }),
       model('qwen3-8b', 'Qwen 3 · 8B', 'ollama', ['chat'], {
         backend_model: 'qwen3:8b', management: 'external', port: 11434, loaded: false,
+        chat_controls: { thinking: true, reasoning_efforts: [], reasoning_budget: false, default_thinking: null, default_effort: null, source: 'configured' },
         lifecycle: { state: 'unmanaged', reason: '由 Ollama 管理，按需加载' },
         monitoring_support: { health: true, metrics: false, slots: false, process_stats: false, output: false },
       }),

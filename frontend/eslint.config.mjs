@@ -16,7 +16,7 @@ export default [
     languageOptions: { globals: Object.fromEntries([
       'window', 'document', 'location', 'navigator', 'fetch', 'Headers', 'Request', 'Response',
       'AbortController', 'AbortSignal', 'DOMException', 'URL', 'URLSearchParams', 'HTMLElement',
-      'HTMLInputElement', 'HTMLDialogElement', 'HTMLButtonElement', 'HTMLDivElement',
+      'HTMLInputElement', 'HTMLDialogElement', 'HTMLButtonElement', 'HTMLDivElement', 'HTMLTextAreaElement', 'HTMLSelectElement', 'BeforeUnloadEvent',
       'Event', 'KeyboardEvent', 'MouseEvent', 'FocusEvent', 'ResizeObserver',
       'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame',
       'cancelAnimationFrame', 'console', 'performance', 'process', 'global',

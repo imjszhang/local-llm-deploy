@@ -60,7 +60,7 @@ Python 的监控 DTO 和采集缓存位于 `gateway/monitor_api.py`；路由、�
 
 新增 GET/HEAD `/monitor-api/v1/snapshot` 和 `/monitor-api/v1/models/{key}`；后者接受显式 `include_output=1` 读取源端已存在的有界调试输出。路径在静态处理之前明确分流，复用 ApiAuth。其余方法返回 405，未知路径 JSON 404。旧公开概览接口保持原样；未认证页面仍可显示其公开摘要。接口不暴露原始环境、完整命令、密钥或模型绝对路径。
 
-字段定义以 `frontend/src/api/types.ts` 为共享契约。时间均为 Unix 毫秒。快照含 schema_version、snapshot_id、generated_at、来源有效性、system、lanes、models、diagnostics。模型分开表达 lifecycle、availability、routing、activity、monitoring_support；缺失读数为 null。详情按健康/指标/槽位/进程/Ollama 分区，各区有独立状态。
+字段定义以 `frontend/src/features/monitor/api/types.ts` 为共享契约。时间均为 Unix 毫秒。快照含 schema_version、snapshot_id、generated_at、来源有效性、system、lanes、models、diagnostics。模型分开表达 lifecycle、availability、routing、activity、monitoring_support；缺失读数为 null。详情按健康/指标/槽位/进程/Ollama 分区，各区有独立状态。
 
 监控不能把一次 TCP 成功当作可路由，也不能根据缺少 PID 就确认进程不存在。活动计数作用域是当前网关，uncertain 保留占用。系统/目录/发现分别缓存，多浏览器共享采集；探测并发和响应字节有界。请求处理读取已发布快照，慢探测不持有快照读锁。
 

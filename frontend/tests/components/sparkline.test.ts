@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
-import Sparkline from "../../src/components/Sparkline.vue";
+import Sparkline from "../../src/features/monitor/components/Sparkline.vue";
 
 describe("trend time axis", () => {
   it("plots five-second and sixty-second intervals at their real spacing", () => {

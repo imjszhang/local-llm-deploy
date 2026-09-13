@@ -102,3 +102,11 @@ Chat 默认并发 1；Embedding 为 2；Rerank 和 ASR 各为 1。Embedding 内�
 模型权重保留在 `models/`，manifest 明确选择安装路径。同量化多安装不任意选取，需 `--model-dir`。下载、启动和删除使用协调锁，清单更新使用独立读改写锁。外部服务与模型 API 代理的生命周期归属分开。
 
 `/knowledge/` 仅反向代理外部知识库，转发客户端 Authorization；它不是本仓库的 RAG 或知识库实现。
+
+### 对话工作区
+
+静态前端使用同一 Vue 应用承载 `#/monitor` 与 `#/chat`，聊天模块按需加载。`app/context.ts` 持有应用级监控实例和内存凭据；`features/monitor` 与 `features/chat` 分别承载监控、推理测试，`shared` 仅放实际复用的组件和样式。
+
+聊天请求经同源 `/v1/chat/completions` 进入既有调度器。SSE 解析、有效上下文构造、会话请求所有权与内容渲染分层实现；页面同时只有一个生成请求，异步写入按生成标识隔离。凭据或会话移除会使旧请求失效。历史与参数经 `/chat-api/v1/sessions` 自动保存至本机 SQLite；`chat_store.py` 负责结构验证、版本检查和事务，前端 history client 与 useChatHistory 负责恢复、自动保存和冲突反馈。凭据保持只存内存。单次请求保存可导出的模型/参数/上下文快照，存储细节见 [会话存储](chat-history.md)。
+
+浏览器停止读取后仍遵守现有 uncertain 机制。此工作区不提供解除占用、启动或停止模型的管理接口。具体限制与验收记录见 [模型对话实施计划](chat-ui-plan.md)。

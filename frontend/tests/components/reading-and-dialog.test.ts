@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import DialogShell from "../../src/components/DialogShell.vue";
-import SlotOutput from "../../src/components/SlotOutput.vue";
+import DialogShell from "../../src/shared/components/DialogShell.vue";
+import SlotOutput from "../../src/features/monitor/components/SlotOutput.vue";
 
 afterEach(() => {
   document.body.innerHTML = "";

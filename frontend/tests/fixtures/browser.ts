@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import type { Snapshot } from '../../src/api/types'
+import type { Snapshot } from '../../src/features/monitor/api/types'
 import { createDetail, createSnapshot } from './monitor'
 
 export async function mockMonitor(page: Page, options: { authenticated?: boolean; unsupported?: boolean } = {}) {

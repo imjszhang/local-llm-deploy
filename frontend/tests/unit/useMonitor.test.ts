@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useMonitor } from '../../src/composables/useMonitor'
-import { MonitorApiError, type MonitorClient } from '../../src/api/client'
-import type { ModelDetail, Snapshot } from '../../src/api/types'
+import { useMonitor } from '../../src/features/monitor/composables/useMonitor'
+import { MonitorApiError, type MonitorClient } from '../../src/features/monitor/api/client'
+import type { ModelDetail, Snapshot } from '../../src/features/monitor/api/types'
 import { sampleDetail, sampleSnapshot } from './data-fixtures'
 function deferred<T>() {
   let resolve!: (value: T) => void

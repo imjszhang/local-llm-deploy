@@ -98,6 +98,33 @@ def _patterns_value(key, field, value):
         raise ConfigError(f"{key}: {field} 必须是字符串或字符串列表")
 
 
+def _validate_chat_controls(key, value):
+    fields = {"thinking", "reasoning_efforts", "reasoning_budget", "default_thinking", "default_effort"}
+    if not isinstance(value, dict):
+        raise ConfigError(f"{key}: chat_controls 必须是对象")
+    if set(value) - fields:
+        raise ConfigError(f"{key}: chat_controls 包含未知字段")
+    if fields - set(value):
+        raise ConfigError(f"{key}: chat_controls 必须完整声明 thinking、reasoning_efforts、reasoning_budget、default_thinking、default_effort")
+    for field in ("thinking", "reasoning_budget"):
+        if type(value[field]) is not bool:
+            raise ConfigError(f"{key}: chat_controls.{field} 必须是布尔值")
+    if value["default_thinking"] is not None and type(value["default_thinking"]) is not bool:
+        raise ConfigError(f"{key}: chat_controls.default_thinking 必须是布尔值或 null")
+    efforts = value["reasoning_efforts"]
+    if (not isinstance(efforts, list) or len(efforts) > 8 or
+            any(not isinstance(effort, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,23}", effort)
+                or effort == "none" for effort in efforts)):
+        raise ConfigError(f"{key}: chat_controls.reasoning_efforts 必须是至多 8 个非空短标识的列表（不能包含 none）")
+    if len(set(efforts)) != len(efforts):
+        raise ConfigError(f"{key}: chat_controls.reasoning_efforts 不能重复")
+    default = value["default_effort"]
+    if default is not None and (not isinstance(default, str) or default not in efforts):
+        raise ConfigError(f"{key}: chat_controls.default_effort 必须是 reasoning_efforts 中的值或 null")
+    if not value["thinking"] and (efforts or value["reasoning_budget"] or value["default_thinking"] is True or default is not None):
+        raise ConfigError(f"{key}: chat_controls.thinking 为 false 时不能声明推理强度、预算或默认开启")
+
+
 def _validate_known_fields(key, cfg):
     """Validate JSON shapes before hashing, path construction or coercion.
 
@@ -121,6 +148,8 @@ def _validate_known_fields(key, cfg):
     for field in ("params", "runtime", "quants"):
         if field in cfg and not isinstance(cfg[field], dict):
             raise ConfigError(f"{key}: {field} 必须是对象")
+    if "chat_controls" in cfg:
+        _validate_chat_controls(key, cfg["chat_controls"])
     for field in ("capabilities", "default_for", "endpoints"):
         if field not in cfg or (field == "endpoints" and cfg[field] is None):
             continue
@@ -176,6 +205,8 @@ def normalize_models(raw: Any) -> dict[str, ModelSpec]:
             raise ConfigError(f"{key}: 未知旧模型类型 {typ!r}")
         capability, backend = legacy[typ]
         backend = cfg.get("backend") or ("external_http" if cfg.get("external_backend") else backend)
+        if backend == "ollama" and cfg.get("chat_controls", {}).get("reasoning_budget"):
+            raise ConfigError(f"{key}: Ollama chat_controls.reasoning_budget 必须为 false")
         caps = cfg.get("capabilities", [capability])
         if not isinstance(caps, list) or not caps or any(c not in ("chat", "embedding", "rerank", "asr") for c in caps):
             raise ConfigError(f"{key}: capabilities 必须是有效能力列表")

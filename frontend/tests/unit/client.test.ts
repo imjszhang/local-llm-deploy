@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createMonitorClient, MonitorApiError } from '../../src/api/client'
-import { parseDetail, parseSnapshot } from '../../src/domain/validation'
+import { createMonitorClient, MonitorApiError } from '../../src/features/monitor/api/client'
+import { parseDetail, parseSnapshot } from '../../src/features/monitor/domain/validation'
 import { sampleDetail, sampleSnapshot } from './data-fixtures'
 const signal = () => new AbortController().signal
 

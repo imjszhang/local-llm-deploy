@@ -97,6 +97,40 @@ class MonitorFixture(unittest.TestCase):
 
 
 class MonitorContractTests(MonitorFixture):
+    def test_snapshot_exposes_declared_chat_controls_without_metadata_probes(self):
+        controls = {'thinking': True, 'reasoning_efforts': ['low', 'medium', 'xhigh'],
+                    'reasoning_budget': True, 'default_thinking': False, 'default_effort': 'xhigh'}
+        self.context.specs['chat'] = normalize_models({'chat': {'alias': 'Chat fixture',
+                                                              'chat_controls': controls}})['chat']
+        row = next(row for row in self.snapshot()['models'] if row['key'] == 'chat')
+        self.assertEqual(row['chat_controls'], {**controls, 'source': 'configured'})
+        self.assertEqual(self.fetches, [])
+
+    def test_chat_controls_are_explicit_whitelisted_and_never_inferred(self):
+        controls = {'thinking': True, 'reasoning_efforts': ['low', 'medium', 'xhigh'],
+                    'reasoning_budget': True, 'default_thinking': False, 'default_effort': 'xhigh'}
+        raw = {'declared': {'chat_controls': controls, 'extension': {'credential': 'private fixture'}},
+               'unknown': {}, 'embed-only': {'type': 'embedding', 'chat_controls': controls},
+               'external': {'backend': 'external_http', 'chat_controls': controls},
+               'ollama-declared': {'type': 'ollama', 'ollama_model': 'declared:latest',
+                                   'chat_controls': {**controls, 'reasoning_budget': False}}}
+        specs = normalize_models(raw)
+        # The DTO remains a whitelist even if a future registry extension adds
+        # fields after validation. Never expose raw model config or references.
+        specs['declared'].raw['chat_controls']['private_extension'] = 'private fixture'
+        rows = {row['key']: row for row in self.monitor._models(specs, {
+            'models': {'discovered': Backend('discovered', 'Discovered', 'http://127.0.0.1:9001')}
+        }, {})}
+        self.assertEqual(rows['declared']['chat_controls'], {**controls, 'source': 'configured'})
+        self.assertEqual(rows['ollama-declared']['chat_controls'],
+                         {**controls, 'reasoning_budget': False, 'source': 'configured'})
+        for key in ('unknown', 'embed-only', 'external', 'discovered'):
+            self.assertIsNone(rows[key]['chat_controls'])
+        self.assertNotIn('private fixture', json.dumps(rows))
+        rows['declared']['chat_controls']['reasoning_efforts'].append('changed')
+        self.assertEqual(specs['declared'].raw['chat_controls']['reasoning_efforts'], ['low', 'medium', 'xhigh'])
+        self.assertEqual(self.fetches, [])
+
     def test_full_catalog_identity_lifecycle_availability_and_scoped_activity(self):
         first = self.monitor.snapshot()
         self.assertEqual({m['key'] for m in first['models']}, set(self.specs))
@@ -114,6 +148,7 @@ class MonitorContractTests(MonitorFixture):
         self.assertFalse(rows['ollama']['routing']['available'])
         self.assertEqual(rows['embed']['activity']['scope'], 'gateway')
         self.assertFalse(rows['embed']['monitoring_support']['slots'])
+        self.assertTrue(all(row['chat_controls'] is None for row in rows.values()))
         self.assertNotIn(str(self.paths.root), json.dumps(data))
         self.assertEqual(data['system']['cpu']['user'], 0)
 

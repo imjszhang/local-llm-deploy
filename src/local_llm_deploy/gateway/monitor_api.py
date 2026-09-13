@@ -129,6 +129,22 @@ def _section(state='loading', message=None, **values):
     return {'state': state, 'message': message, **values}
 
 
+def _chat_controls(spec):
+    # Declaration only: backend names and template capability booleans do not
+    # establish the accepted effort levels for a particular model/template.
+    if spec is None or 'chat' not in spec.capabilities or spec.backend not in ('llama_cpp', 'ollama'):
+        return None
+    declaration = spec.raw.get('chat_controls')
+    if declaration is None:
+        return None
+    return {'thinking': declaration['thinking'],
+            'reasoning_efforts': list(declaration['reasoning_efforts']),
+            'reasoning_budget': declaration['reasoning_budget'],
+            'default_thinking': declaration['default_thinking'],
+            'default_effort': declaration['default_effort'],
+            'source': 'configured'}
+
+
 def _blank_detail(key, support, now, ollama=False):
     return {'schema_version': 1, 'key': key, 'generated_at': now,
             'health': _section('loading' if support['health'] else 'unsupported'),
@@ -376,6 +392,7 @@ class MonitorAPI:
                            'activity': {'active': budget.get('active_slots', 0), 'waiting': budget.get('waiting', 0),
                                         'uncertain': uncertain, 'scope': 'gateway'},
                            'monitoring_support': support,
+                           'chat_controls': _chat_controls(spec),
                            'budget': {'used': budget.get('used', 0), 'total': budget.get('total', 0)}
                            if 'chat' in info.capabilities and budget else None,
                            'loaded': target in loaded if backend == 'ollama' and ollama.get('status') == 'running'

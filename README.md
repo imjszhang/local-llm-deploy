@@ -29,7 +29,7 @@ python3 -m venv .venv
 ./manage.sh start serve-ui
 ```
 
-访问 [监控页面](http://localhost:8888/monitor.html)，查看系统趋势、全部模型、通道活动和后端详情。如果配置了 `.api-key`，通过“访问设置”输入后读取完整状态；Key 只保存在当前页面内存中。页面为只读控制台，启动无需 Node。前端开发和构建见 [frontend/README.md](frontend/README.md)。
+访问 [监控页面](http://localhost:8888/monitor.html)，查看系统趋势、全部模型、通道活动和后端详情。通过本机地址访问时自动连接，网关在服务端读取 `.api-key`，根 Key 不传入浏览器；远程访问通过“访问设置”输入凭据。模型对话工作区支持本地推理测试，在“测试设置”中按模型配置思考开关、推理强度与预算，详见 [思考控制](docs/chat-reasoning.md)。启动无需 Node；前端开发和构建见 [frontend/README.md](frontend/README.md)。
 
 ## 日常管理
 
@@ -111,3 +111,9 @@ docs/                 部署、开发、架构、升级与验收文档
 - [验证记录](docs/validation.md)
 - [重构计划](docs/refactoring-plan.md)
 - [监控控制台实施与验收](docs/monitor-ui-plan.md)
+
+### 本地模型对话
+
+打开 [模型对话工作区](http://127.0.0.1:8888/monitor.html#/chat)，本机自动连接（远程访问需设置凭据），选择 Chat 模型即可多轮交流、调整参数、停止/重新生成、查看用量与导出测试记录。监控页模型详情也提供“进入对话”入口。
+
+会话自动保存到本机 `data/chat-history.sqlite3`，刷新或重启后可恢复；整个 `data/` 目录不提交 GitHub。凭据仍只存页面内存。保存范围与备份见 [会话存储](docs/chat-history.md)。停止接收不保证后端立即结束。操作及统计口径见 [前端使用说明](frontend/README.md#模型对话)。

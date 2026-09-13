@@ -99,7 +99,11 @@ class MonitorStaticTests(unittest.TestCase):
         parser.feed((self.paths.static / 'monitor.html').read_text(encoding='utf-8'))
         self.assertTrue(any(path.endswith('.js') for path in parser.paths))
         self.assertTrue(any(path.endswith('.css') for path in parser.paths))
-        for path in parser.paths:
+        # Lazy workspaces are not referenced directly by the entry HTML.
+        asset_paths = sorted(set(parser.paths) | {
+            '/' + name for name in entries if name.endswith(('.js', '.css'))
+        })
+        for path in asset_paths:
             with self.subTest(path=path):
                 self.assertRegex(path, r'^/monitor-assets/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8,}\.(?:js|css)$')
                 self.assertIn(path.lstrip('/'), entries)
@@ -137,8 +141,10 @@ class MonitorStaticTests(unittest.TestCase):
         parser = AssetReferences()
         parser.feed((self.paths.static / 'monitor.html').read_text(encoding='utf-8'))
         self.assertTrue(parser.paths)
+        manifest = json.loads((self.paths.static / 'monitor-manifest.json').read_text(encoding='utf-8'))
+        lazy_assets = ['/' + item['path'] for item in manifest['files'] if item['path'].endswith(('.js', '.css'))]
         with patch('subprocess.Popen', side_effect=AssertionError('Static serving attempted a subprocess')) as process:
-            for path in ('/', '/monitor.html', *parser.paths):
+            for path in ('/', '/monitor.html', *parser.paths, *lazy_assets):
                 self.assertEqual(self.request(path)[0], 200)
                 self.assertEqual(self.request(path, 'HEAD')[0], 200)
             process.assert_not_called()

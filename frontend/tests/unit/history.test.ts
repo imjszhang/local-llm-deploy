@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addHistory, HISTORY_WINDOW } from '../../src/domain/history'
+import { addHistory, HISTORY_WINDOW } from '../../src/features/monitor/domain/history'
 import { sampleSnapshot } from './data-fixtures'
 
 describe('bounded observation history', () => {

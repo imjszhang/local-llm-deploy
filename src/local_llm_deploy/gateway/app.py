@@ -15,7 +15,8 @@ from urllib.parse import urlsplit
 
 from local_llm_deploy.config import load_specs, project_paths
 from local_llm_deploy.observability import AccessLogger, log
-from .auth import ApiAuth, BackendAuthError, backend_credentials
+from .auth import ApiAuth, BackendAuthError, ConsoleSessions, backend_credentials
+from .chat_store import ChatStore, MAX_BYTES as CHAT_MAX_BYTES, chat_target, parse_payload
 from .discovery import Discovery
 from .knowledge import is_knowledge_path, knowledge_backend_url, knowledge_redirect_location
 from .monitoring import Monitoring
@@ -48,6 +49,8 @@ class GatewayContext:
         self.router = Router(self.specs, self.settings)
         self.transport = transport or Transport(self.settings)
         self.auth = auth or ApiAuth(self.paths.api_key)
+        self.console_sessions = ConsoleSessions(self.auth)
+        self.chat_store = ChatStore(self.paths)
         self.monitoring = monitoring or Monitoring(self.discovery, self.scheduler, self.settings)
         self.monitor_api = monitor_api or MonitorAPI(self)
         self.logger = AccessLogger(self.settings.access_log, capture_bytes=self.settings.capture_bytes,
@@ -151,6 +154,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         cache_control = getattr(self, '_static_cache_control', None)
         if cache_control and getattr(self, '_response_status', None) in (200, 304):
             self.send_header('Cache-Control', cache_control)
+        if getattr(self, '_console_response', False) and getattr(self, '_response_status', 0) >= 400:
+            self.send_header('Cache-Control', 'no-store')
         super().end_headers()
 
     def log_message(self, fmt, *args):
@@ -161,10 +166,17 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         # Validate credentials and size before accepting an upload, including
         # Expect: 100-continue clients. The regular dispatcher repeats checks.
         writer = ResponseWriter(self)
+        self._console_response = urlsplit(self.path).path.startswith(('/console-api', '/chat-api'))
         try:
             path = urlsplit(self.path if is_knowledge_path(self.path) else normalize_proxy_path(self.path)).path
+            if is_knowledge_path(self.path) and self._known_console_authorization():
+                raise RoutingError(401, 'Console session does not authorize knowledge requests')
+            if path == '/console-api' or path.startswith('/console-api/'):
+                self._console_session_target(normalize_proxy_path(self.path))
+            if path == '/chat-api' or path.startswith('/chat-api/'):
+                self._chat_request_target(normalize_proxy_path(self.path))
             if (path.startswith(('/api/', '/v1/', '/monitor-api/')) or path == '/monitor-api') and path not in ('/api/models', '/api/system'):
-                if not self.context.auth.authorized(self.headers.get('Authorization')):
+                if not self._authorized(path):
                     self.close_connection = True
                     writer.error(401, 'Invalid API key', code='invalid_request_error')
                     return False
@@ -180,6 +192,60 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             writer.error(exc.status, str(exc))
             return False
         return super().handle_expect_100()
+
+    def _authorized(self, path):
+        authorization = self.headers.get('Authorization')
+        if path == '/chat-api' or path.startswith('/chat-api/'):
+            # A missing model API key leaves inference open, but never grants
+            # anonymous access to private chat history.
+            if len(self.headers.get_all('Authorization', [])) != 1:
+                return False
+            return (self.context.auth.matches_configured_key(authorization) or
+                    self.context.console_sessions.authorized(self, path))
+        if self.context.console_sessions.is_session_authorization(authorization):
+            if self.context.auth.matches_configured_key(authorization):
+                return True
+            return self.context.console_sessions.authorized(self, path)
+        return self.context.auth.authorized(authorization)
+
+    def _known_console_authorization(self):
+        authorization = self.headers.get('Authorization')
+        return (self.context.console_sessions.recognizes(authorization) and
+                not self.context.auth.matches_configured_key(authorization))
+
+    def _console_session_target(self, request_path):
+        self._console_response = True
+        if not self.context.console_sessions.local_origin(self, issuing=True):
+            raise RoutingError(403, 'Automatic console access requires a direct same-origin localhost connection')
+        if request_path != '/console-api/v1/session':
+            raise RoutingError(404, 'Unknown console endpoint')
+        if self.command != 'POST':
+            raise RoutingError(405, 'Method not allowed')
+        if self._content_length():
+            raise RoutingError(400, 'Console session requests must not contain a body')
+
+    def _chat_request_target(self, request_path):
+        self._console_response = True
+        try:
+            authorized = self._authorized(urlsplit(request_path).path)
+        except (OSError, UnicodeError):
+            raise RoutingError(503, 'Chat history credentials are unavailable') from None
+        if not authorized:
+            raise RoutingError(401, 'Chat history requires an API key or local console session')
+        identifier = chat_target(request_path, self.command)
+        length = self._content_length()
+        if length > CHAT_MAX_BYTES:
+            raise RoutingError(413, 'Chat history request exceeds 8 MiB limit')
+        if self.command == 'GET':
+            if length:
+                raise RoutingError(400, 'Chat history reads must not contain a body')
+        else:
+            content_types = self.headers.get_all('Content-Type', [])
+            if len(content_types) != 1 or content_types[0].split(';', 1)[0].strip().lower() != 'application/json':
+                raise RoutingError(415, 'Chat history writes require application/json')
+            if not length:
+                raise RoutingError(400, 'Chat history request body is required')
+        return identifier
 
     def _content_length(self):
         if self.headers.get('Transfer-Encoding'):
@@ -206,17 +272,20 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
     def _json(self, writer, payload):
         writer.start(200, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'})
-        writer.write(json.dumps(payload, ensure_ascii=False).encode())
+        writer.write(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode())
         writer.finish()
 
     def dispatch(self):
         ctx = self.context
         self._static_cache_control = None
+        self._console_response = urlsplit(self.path).path.startswith(('/console-api', '/chat-api'))
         writer = ResponseWriter(self)
         self.connection.settimeout(ctx.settings.client_write_timeout)
         path = urlsplit(self.path).path
         try:
             if is_knowledge_path(self.path):
+                if self._known_console_authorization():
+                    raise RoutingError(401, 'Console session does not authorize knowledge requests')
                 if path == '/knowledge':
                     writer.start(301, {'Location': knowledge_redirect_location(self.path)})
                     writer.finish()
@@ -227,8 +296,26 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 return
             request_path = normalize_proxy_path(self.path)
             path = urlsplit(request_path).path
+            if path == '/chat-api' or path.startswith('/chat-api/'):
+                identifier = self._chat_request_target(request_path)
+                if self.command == 'GET':
+                    result = ctx.chat_store.list() if identifier is None else ctx.chat_store.get(identifier)
+                elif self.command == 'PUT':
+                    result = ctx.chat_store.put(identifier, parse_payload(self._body()))
+                else:
+                    result = ctx.chat_store.delete(identifier, parse_payload(self._body()))
+                self._json(writer, result)
+                return
+            if path == '/console-api' or path.startswith('/console-api/'):
+                self._console_session_target(request_path)
+                try:
+                    session = ctx.console_sessions.issue(ctx.console_sessions.local_origin(self, issuing=True))
+                except (OSError, UnicodeError):
+                    raise RoutingError(503, 'Console credentials are unavailable') from None
+                self._json(writer, session)
+                return
             if path == '/monitor-api' or path.startswith('/monitor-api/'):
-                if not ctx.auth.authorized(self.headers.get('Authorization')):
+                if not self._authorized(path):
                     self.close_connection = True
                     writer.error(401, 'Invalid API key', code='invalid_request_error')
                     return
@@ -259,7 +346,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     raise RoutingError(405, 'Read-only endpoint')
                 self._json(writer, ctx.monitoring.models() if path == '/api/models' else ctx.monitoring.system())
                 return
-            if not ctx.auth.authorized(self.headers.get('Authorization')):
+            if not self._authorized(path):
                 self.close_connection = True
                 writer.error(401, 'Invalid API key', code='invalid_request_error')
                 return

@@ -1,0 +1,173 @@
+import { expect, test, type Page } from '@playwright/test'
+import { mockMonitor } from '../fixtures/browser'
+
+async function setup(page: Page, authenticated = false) {
+  const state = await mockMonitor(page, { authenticated })
+  const requests: { model: string; messages: { role: string; content: string }[]; temperature?: number }[] = []
+  await page.route('**/v1/chat/completions', async route => {
+    requests.push(route.request().postDataJSON())
+    await route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: `回答 ${requests.length}\n\n**安全 Markdown**` }, finish_reason: null }] })}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}\n\ndata: [DONE]\n\n` })
+  })
+  await page.goto('/monitor.html#/chat')
+  const workspace = page.getByRole('region', { name: '模型对话测试台' })
+  if (authenticated) {
+    await workspace.getByRole('button', { name: '设置访问凭据' }).click()
+    await page.getByLabel('API Key', { exact: true }).fill('fixture-key')
+    await page.getByRole('button', { name: '应用凭据' }).click()
+  }
+  await expect(workspace.locator('#chat-model option[value="qwen3.8-27b"]')).toHaveCount(1)
+  await workspace.getByLabel('对话模型', { exact: true }).selectOption('qwen3.8-27b')
+  return { workspace, requests, state }
+}
+
+test('multi-turn, parameter snapshots, regeneration and editing build exact context', async ({ page }) => {
+  const { workspace, requests } = await setup(page)
+  await workspace.getByRole('button', { name: '测试设置', exact: true }).click()
+  await workspace.getByLabel('System Prompt', { exact: true }).fill('简短回答')
+  await workspace.getByLabel('Temperature', { exact: true }).fill('0.5')
+  await workspace.getByLabel('消息输入').fill('第一问')
+  await workspace.getByRole('button', { name: '发送 ↑' }).click()
+  await expect(workspace.getByText('已完成', { exact: true })).toHaveCount(1)
+  expect(requests[0]?.messages).toEqual([{ role: 'system', content: '简短回答' }, { role: 'user', content: '第一问' }])
+  expect(requests[0]?.temperature).toBe(0.5)
+  await workspace.getByRole('button', { name: '重新生成', exact: true }).click()
+  await expect(workspace.getByText('回答 2', { exact: true })).toBeVisible()
+  expect(requests[1]?.messages).toEqual(requests[0]?.messages)
+  await workspace.getByLabel('消息输入').fill('第二问')
+  await workspace.getByLabel('消息输入').press('Enter')
+  await expect(workspace.getByText('回答 3', { exact: true })).toBeVisible()
+  expect(requests[2]?.messages.map(m => m.content)).toEqual(['简短回答', '第一问', '回答 2\n\n**安全 Markdown**', '第二问'])
+  await workspace.getByRole('button', { name: '编辑并重新发送' }).click()
+  await expect(workspace.getByLabel('消息输入')).toHaveValue('第二问')
+  await workspace.getByLabel('消息输入').fill('修改的问题')
+  await workspace.getByRole('button', { name: '发送 ↑' }).click()
+  await expect(workspace.getByText('回答 4', { exact: true })).toBeVisible()
+  expect(requests[3]?.messages.map(m => m.content)).not.toContain('第二问')
+})
+
+test('workspace navigation preserves conversation; model switch defaults to new session', async ({ page }) => {
+  const { workspace } = await setup(page)
+  await workspace.getByLabel('消息输入').fill('保留会话')
+  await workspace.getByRole('button', { name: '发送 ↑' }).click()
+  await expect(workspace.getByText('已完成', { exact: true })).toBeVisible()
+  await page.getByRole('link', { name: '运行监控', exact: true }).click()
+  await expect(workspace).toBeHidden()
+  await expect(page.locator('#main-content')).toBeVisible()
+  await page.getByRole('link', { name: '模型对话', exact: true }).click()
+  await expect(workspace.getByText('回答 1', { exact: true })).toBeVisible()
+  await expect(page.locator('#main-content')).toBeHidden()
+  await workspace.getByLabel('对话模型', { exact: true }).selectOption('qwen3-8b')
+  await page.getByRole('dialog', { name: '切换对话模型' }).getByRole('button', { name: '新建会话' }).click()
+  await expect(workspace.getByLabel('对话模型', { exact: true })).toHaveValue('qwen3-8b')
+  await expect(workspace.getByText('从一个问题开始测试')).toBeVisible()
+  await expect(workspace.locator('.chat-session')).toHaveCount(2)
+})
+
+test('credential clear removes chat and stays out of export and storage', async ({ page }) => {
+  const { workspace } = await setup(page, true)
+  await workspace.getByLabel('消息输入').fill('私有测试消息')
+  await workspace.getByRole('button', { name: '发送 ↑' }).click()
+  await expect(workspace.getByText('已完成', { exact: true })).toBeVisible()
+  const download = page.waitForEvent('download')
+  await workspace.getByRole('button', { name: '导出 JSON' }).click()
+  const stream = await (await download).createReadStream()
+  let exported = ''; for await (const chunk of stream!) exported += chunk.toString()
+  expect(exported).toContain('schema_version')
+  expect(exported).not.toContain('fixture-key')
+  expect(await page.evaluate(() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)]))).not.toContain('fixture-key')
+  await workspace.getByRole('button', { name: '访问设置 · 已设置' }).click()
+  await page.getByRole('button', { name: '清除凭据', exact: true }).click()
+  await expect(workspace.getByText('私有测试消息', { exact: true })).toHaveCount(0)
+  await expect(workspace.getByText('从一个问题开始测试')).toBeVisible()
+})
+
+test('unsafe Markdown cannot execute or load remote images', async ({ page }) => {
+  const { workspace } = await setup(page)
+  await page.route('**/v1/chat/completions', route => route.fulfill({ json: { choices: [{ message: { content: '<img src=x onerror="window.injected=1">\n\n[bad](javascript:alert(1))\n\n![remote](https://example.com/private.png)\n\n```python\nprint("hello")\n```' }, finish_reason: 'stop' }] } }))
+  await workspace.getByLabel('消息输入').fill('测试渲染')
+  await workspace.getByRole('button', { name: '发送 ↑' }).click()
+  await expect(workspace.getByText('已完成', { exact: true })).toBeVisible()
+  await expect(workspace.locator('.chat-markdown img')).toHaveCount(0)
+  await expect(workspace.locator('.chat-markdown a[href^="javascript:"]')).toHaveCount(0)
+  expect(await page.evaluate(() => 'injected' in window)).toBe(false)
+  await expect(workspace.locator('.hljs-built_in')).toBeVisible()
+})
+
+test('stream failure preserves partial answer outside next context', async ({ page }) => {
+  const { workspace, requests } = await setup(page)
+  await page.route('**/v1/chat/completions', async route => {
+    requests.push(route.request().postDataJSON())
+    await route.fulfill({ contentType: 'text/event-stream', body: 'data: {"choices":[{"delta":{"content":"不完整回答"}}]}\n\n' })
+  })
+  await workspace.getByLabel('消息输入').fill('失败测试')
+  await workspace.getByRole('button', { name: '发送 ↑' }).click()
+  await expect(workspace.getByText('生成失败', { exact: true })).toBeVisible()
+  await expect(workspace.getByText('不完整回答', { exact: true })).toBeVisible()
+  await workspace.getByLabel('消息输入').fill('继续')
+  await workspace.getByRole('button', { name: '发送 ↑' }).click()
+  await expect(workspace.getByText('生成失败', { exact: true })).toHaveCount(2)
+  expect(requests[1]?.messages.map(m => m.content)).not.toContain('不完整回答')
+})
+
+for (const width of [375, 768, 1440]) {
+  test(`chat layout ${width} and IME does not accidentally send`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 950 })
+    const { workspace, requests } = await setup(page)
+    await workspace.getByLabel('消息输入').fill('输入法测试')
+    await workspace.getByLabel('消息输入').dispatchEvent('keydown', { key: 'Enter', isComposing: true })
+    expect(requests).toHaveLength(0)
+    await workspace.getByRole('button', { name: '发送 ↑' }).click()
+    await expect(workspace.getByText('已完成', { exact: true })).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`chat-${width}.png`), fullPage: true })
+    await workspace.getByRole('button', { name: '测试设置', exact: true }).click()
+    await expect(page.getByLabel('System Prompt', { exact: true })).toBeVisible()
+    if (width <= 1100) { await page.keyboard.press('Escape'); await expect(workspace.getByRole('button', { name: '测试设置', exact: true })).toBeFocused() }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  })
+}
+
+test('invalid parameters preserve draft; offline models cannot be selected', async ({ page }) => {
+  const { workspace, requests } = await setup(page)
+  await expect(workspace.locator('#chat-model option[value="deepseek-v4"]')).toBeDisabled()
+  await workspace.getByRole('button', { name: '测试设置', exact: true }).click()
+  await workspace.getByLabel('Temperature', { exact: true }).fill('3')
+  await workspace.getByLabel('消息输入').fill('保留这份草稿')
+  await workspace.getByRole('button', { name: '发送 ↑' }).click()
+  await expect(workspace.getByRole('alert')).toContainText('temperature')
+  await expect(workspace.getByLabel('消息输入')).toHaveValue('保留这份草稿')
+  expect(requests).toHaveLength(0)
+})
+
+test('HTTP failure does not retry automatically and exposes explicit recovery', async ({ page }) => {
+  const { workspace, requests } = await setup(page)
+  await page.route('**/v1/chat/completions', async route => {
+    requests.push(route.request().postDataJSON())
+    await route.fulfill({ status: 429, json: { error: { message: 'private backend details' } } })
+  })
+  await workspace.getByLabel('消息输入').fill('队列测试')
+  await workspace.getByRole('button', { name: '发送 ↑' }).click()
+  await expect(workspace.getByRole('alert')).toContainText('队列已满')
+  await expect(workspace.getByRole('button', { name: '重试', exact: true })).toBeVisible()
+  expect(requests).toHaveLength(1)
+  await expect(workspace.getByText('private backend details')).toHaveCount(0)
+})
+
+test('rename, copy code and delete session are keyboard accessible', async ({ page }) => {
+  const { workspace } = await setup(page)
+  await page.route('**/v1/chat/completions', route => route.fulfill({ json: { choices: [{ message: { content: '```python\nprint(42)\n```' }, finish_reason: 'stop' }] } }))
+  await workspace.getByLabel('消息输入').fill('代码测试')
+  await workspace.getByRole('button', { name: '发送 ↑' }).click()
+  await expect(workspace.getByText('已完成', { exact: true })).toBeVisible()
+  const codeButton = workspace.getByRole('button', { name: '复制代码', exact: true })
+  await codeButton.focus()
+  await page.keyboard.press('Enter')
+  await expect(workspace.getByText('代码已复制', { exact: true })).toBeVisible()
+  await workspace.getByRole('button', { name: '重命名', exact: true }).click()
+  await page.getByLabel('会话名称', { exact: true }).fill('我的代码测试')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(workspace.locator('.chat-session-toolbar strong')).toHaveText('我的代码测试')
+  await workspace.getByRole('button', { name: '删除', exact: true }).click()
+  await page.getByRole('button', { name: '删除会话', exact: true }).click()
+  await expect(workspace.getByText('从一个问题开始测试')).toBeVisible()
+})

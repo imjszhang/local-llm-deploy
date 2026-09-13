@@ -197,7 +197,9 @@ def run_stage(name, source, active, temporary, backend_port, port, candidate):
     control, log = temporary / (name + '.json'), temporary / (name + '.log')
     env = {'PATH': os.defpath, 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONNOUSERSITE': '1',
            'TMPDIR': str(temporary)}
-    result = {'name': name, 'source': source_digest(active), 'assets': [], 'checks': [], 'cleanup': {}}
+    result = {'name': name, 'candidate': candidate, 'source': source_digest(active), 'assets': [], 'checks': [], 'cleanup': {}}
+    has_v1 = (active / 'src/local_llm_deploy/gateway/monitor_api.py').is_file()
+    has_manifest = (active / 'static/monitor-manifest.json').is_file()
     process = None
     actual_port = port
     try:
@@ -224,19 +226,20 @@ def run_stage(name, source, active, temporary, backend_port, port, candidate):
             status, headers, html = request(actual_port, '/monitor.html', authorized=False)
             check(status == 200 and html == (active / 'static/monitor.html').read_bytes(), 'served matching HTML')
             result['html_sha256'] = digest(html)
-            check((b'id="app"' in html) == candidate, 'expected previous or Vue page generation')
-            if candidate:
+            check((b'id="app"' in html) == has_manifest, 'expected page generation for staged publication')
+            if has_v1:
                 check(headers.get('Cache-Control') == 'no-cache', 'candidate HTML revalidates')
             parser = Assets()
             parser.feed(html.decode())
             check(bool(parser.paths), 'HTML references local assets')
-            manifest = json.loads((active / 'static/monitor-manifest.json').read_text()) if candidate else None
+            manifest = json.loads((active / 'static/monitor-manifest.json').read_text()) if has_manifest else None
             manifest_files = {entry['path']: entry for entry in manifest['files']} if manifest else {}
-            for asset in parser.paths:
+            asset_paths = sorted(set(parser.paths) | {'/' + key for key in manifest_files if key.endswith(('.js', '.css'))})
+            for asset in asset_paths:
                 status, headers, content = request(actual_port, asset, authorized=False)
                 expected = active / 'static' / asset.lstrip('/')
                 check(status == 200 and expected.is_file() and content == expected.read_bytes(), 'matching asset ' + asset)
-                if candidate:
+                if has_v1:
                     entry = manifest_files.get(asset.lstrip('/'), {})
                     check(entry.get('sha256') == digest(content), 'manifest asset hash ' + asset)
                     check(headers.get('Cache-Control') == 'public, max-age=31536000, immutable', 'immutable asset ' + asset)
@@ -249,7 +252,7 @@ def run_stage(name, source, active, temporary, backend_port, port, candidate):
             check(any(row['name'] == FIXTURE_MODEL for row in public['models']), 'fixture backend discovered')
             status, _, raw = request(actual_port, '/monitor-api/v1/snapshot')
             result['monitor_api_status'] = status
-            if candidate:
+            if has_v1:
                 value = json.loads(raw)
                 check(status == 200 and value.get('schema_version') == 1, 'candidate monitor API v1')
                 deadline = time.monotonic() + 5

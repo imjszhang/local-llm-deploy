@@ -39,6 +39,9 @@ run/
 logs/
 serve-ui-access.jsonl
 
+# 本地会话数据库及 SQLite WAL/SHM/journal、备份，不提交 GitHub
+/data/
+
 # 其他
 archives/
 *.log

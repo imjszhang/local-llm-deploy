@@ -46,7 +46,7 @@ Responses / Messages 仅在模型 `endpoints` 显式包含 `/v1/responses`、`/v
 
 其他方法返回 405，未知监控路径或模型返回 JSON 404，错误参数或有请求体返回 400。新路径先经过认证和专用路由，再处理静态文件；不会误落到目录服务。原公开 `/api/models`、`/api/system` 保持原契约，只用于有限公开摘要。
 
-完整字段见 [TypeScript DTO](../frontend/src/api/types.ts)。时间戳为 Unix 毫秒；缺失值为 `null`，来源包含最后尝试/成功、过期阈值及错误。第一次请求可能触发异步采集并返回 `loading` 分区或空系统读数，客户端应按来源信息继续轮询。采集失败保留已知值并显示过期，不将失败替换为零。
+完整字段见 [TypeScript DTO](../frontend/src/features/monitor/api/types.ts)。时间戳为 Unix 毫秒；缺失值为 `null`，来源包含最后尝试/成功、过期阈值及错误。第一次请求可能触发异步采集并返回 `loading` 分区或空系统读数，客户端应按来源信息继续轮询。采集失败保留已知值并显示过期，不将失败替换为零。
 
 模型的生命周期、可用性、可路由性、活动请求分别表达。未加载的 Ollama 模型可仍然可路由；缺失 PID 不等于确认停止；进程 RSS 是独立指标；预留 token 预算为网关估算。各能力通道的 `active` 和 `waiting` 分开计数，`queue_depth` 包含活动与等待。`uncertain` 占用仍计入活动，且不会由监控读取解除。
 
@@ -103,3 +103,17 @@ SSE 发送头前可返回 HTTP 错误；发送保活头后按对应协议返回�
 非流式及 Ollama 等待首包时也检查连接重置。TCP 的 FIN 可能只是客户端关闭发送方向但仍等待响应，因此不能仅凭 FIN 取消合法请求；明确的 RST、写失败或请求超时才进入放弃与清理流程，未确认上游结束前不会提前释放占用。
 
 `SERVE_UI_ACCESS_LOG` 启用 JSONL 请求元数据；仅 `SERVE_UI_LOG_BODY=1` 开启有界的请求/响应内容记录，ASR 音频不记录。日志不记录 Authorization。
+
+### 本机控制台会话
+
+静态工作台在直连网关的 loopback 地址上通过 `POST /console-api/v1/session` 自动授权，返回 `{token, expires_at}`（Unix 毫秒）。这不是根 `.api-key` 的读取接口，根 Key 始终留在服务端。响应为 `no-store`，内存会话有效 8 小时、最多保留 64 个，绑定签发 Origin 与当前根 Key。
+
+签发要求空请求体、`X-Local-Console: 1`、精确同源 Origin、loopback socket、loopback Host 与实际监听端口；拒绝 Forwarded、X-Forwarded-*、X-Real-IP 和跨站 Fetch Metadata。令牌使用时仍验证这些边界；GET/HEAD 可以无 Origin，但必须有 `Sec-Fetch-Site: same-origin`。
+
+令牌仅授权监控 API v1 的快照/模型详情 GET/HEAD、`/v1/chat/completions` POST，以及历史 API 的会话目录/详情 GET、单会话 PUT/DELETE。其他 API 和知识库不接受此令牌；局域网、代理、外部 API 客户端继续使用原 API Key。根 Key 变更或网关重启会撤销已有本机会话。
+
+此检查拒绝可识别的转发请求；能够完全重写 Host/Origin 并删除转发元信息的本机代理无法仅靠 HTTP 元数据识别。本机进程已属于本部署的信任边界。
+
+## 会话历史 API
+
+`/chat-api/v1/sessions` 提供本机 SQLite 会话目录、读取、版本化写入和删除，见 [会话存储接口](chat-history.md#接口与维护)。历史 API 需要根 Key 精确匹配或本机控制台临时凭据，即使未配置根 Key 也不匿名开放。临时凭据仅新增这些限定 GET/PUT/DELETE 权限，不获得模型管理或其他代理权限。
