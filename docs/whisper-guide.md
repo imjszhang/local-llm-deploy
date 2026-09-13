@@ -1,180 +1,39 @@
-# Whisper ASR 模型使用指南
+# Whisper ASR
 
-本文档介绍本项目中 **Whisper Large V3 (MLX)** 的配置、下载、启动与调用方式。该模型用于语音转文字（ASR），提供 OpenAI 兼容的 `/v1/audio/transcriptions` 接口。
+服务使用 `mlx-whisper`，源码位于 `src/local_llm_deploy/services/whisper.py`。当前已安装版本的 Python 3.14 / Apple Silicon 约束见 `constraints/whisper-macos-py314.txt`；重建结果见 [验证记录](validation.md)。
 
----
+## 安装、下载与启动
 
-## 一、在项目中的角色
-
-| 项目内名称 | 模型 ID（API 用） | 类型 | 默认端口 | 格式 | 磁盘占用 |
-|------------|------------------|------|----------|------|----------|
-| `whisper-large-v3` | `whisper-large-v3` | asr | 8007 | MLX (npz/safetensors) | ~3GB |
-
-- **推理框架**：`mlx-whisper`（Apple Silicon GPU / Metal）
-- **权重来源**：HuggingFace [`mlx-community/whisper-large-v3-mlx`](https://huggingface.co/mlx-community/whisper-large-v3-mlx)（MLX 预转换，非 PyTorch 原版）
-- **路由**：`serve-ui.py`（8888）将 `/v1/audio/transcriptions` 按 multipart 中的 `model` 字段转发到 ASR 后端
-
----
-
-## 二、前置依赖
-
-**Python 版本**：推荐 3.12 或 3.13。当前 Homebrew 默认 3.14 时，`numba` / `tiktoken` 等可能尚无预编译 wheel，需等待上游支持或自行安装 Python 3.12+ 创建 venv。
-
-```bash
-# 音频解码（mlx-whisper 必需）
-brew install ffmpeg
-
-# Python 虚拟环境
-python3 -m venv .venv-whisper
-source .venv-whisper/bin/activate
-pip install -r requirements-whisper.txt
-```
-
-若 `tiktoken` 编译失败，可尝试仅安装 wheel：
-
-```bash
-pip install 'tiktoken>=0.10' --only-binary=:all:
-```
-
----
-
-## 三、配置（models.json）
-
-首次使用可从模板注册：
-
-```bash
-./manage.sh registry init   # 若尚无 models.json
-./manage.sh registry merge models.json.example
-```
-
-或手动添加/合并以下条目：
-
-```json
-"whisper-large-v3": {
-  "type": "asr",
-  "full_model_name": "Whisper Large V3 (MLX)",
-  "download_source": "huggingface",
-  "repo_id": "mlx-community/whisper-large-v3-mlx",
-  "repo_name": "mlx-community-whisper-large-v3-mlx",
-  "alias": "whisper-large-v3",
-  "default_port": 8007,
-  "download_allow_patterns": ["*.json", "*.npz", "*.safetensors", "*.txt", "tokenizer*"],
-  "params": {
-    "language": "zh",
-    "task": "transcribe",
-    "response_format": "json"
-  }
-}
-```
-
-- **language**：默认转写语言（可在 API 请求中覆盖）
-- **task**：`transcribe`（同语言转写）；暂不支持 `translate`
-- **response_format**：`json`（默认）、`text`、`verbose_json`
-
----
-
-## 四、下载模型
+按 [DEPLOY.md](../DEPLOY.md) 创建独立 `.venv-whisper`。音频解码通过 `imageio-ffmpeg` 提供的程序，项目 `tools/ffmpeg` 为兼容启动入口。
 
 ```bash
 ./manage.sh download whisper-large-v3
-```
-
-- 从 HuggingFace 下载到 `models/mlx-community-whisper-large-v3-mlx/`
-- 不支持 `--quant`
-- 可用 `./manage.sh models` 查看目录状态
-
----
-
-## 五、启动服务
-
-```bash
-./manage.sh start whisper-large-v3   # 默认经 whisper.sh → launchd 常驻
-./manage.sh status
-./whisper.sh status                  # launchd / 端口就绪
-```
-
-- 使用 `serve_whisper.py`，默认 **127.0.0.1:8007**
-- 默认通过 LaunchAgent `com.local-llm-deploy.whisper` 常驻（不依赖 Terminal / Cursor 会话）
-- 也可直接：`./whisper.sh start|stop|status`
-- venv：`.venv-whisper`（见 `scripts/start-whisper.sh`）
-- 日志：`logs/whisper-large-v3.log`
-- 首次启动会预热加载模型（约数秒）
-
-可选参数：
-
-```bash
-./manage.sh start whisper-large-v3 --port 8007 --lan   # 监听 0.0.0.0
-```
-
----
-
-## 六、API 调用
-
-### 6.1 直连后端
-
-```bash
-curl -X POST http://127.0.0.1:8007/v1/audio/transcriptions \
-  -F file=@audio.mp3 \
-  -F model=whisper-large-v3 \
-  -F language=zh
-```
-
-### 6.2 经 serve-ui 代理（推荐）
-
-```bash
-curl -X POST http://localhost:8888/v1/audio/transcriptions \
-  -H "Authorization: Bearer <你的API-Key>" \
-  -F file=@audio.mp3 \
-  -F model=whisper-large-v3 \
-  -F language=zh
-```
-
-### 6.3 带 model-key 前缀
-
-```bash
-curl -X POST http://localhost:8888/api/whisper-large-v3/v1/audio/transcriptions \
-  -F file=@audio.mp3
-```
-
-### 6.4 响应格式
-
-| response_format | 返回 |
-|-----------------|------|
-| `json`（默认） | `{"text":"..."}` |
-| `text` | 纯文本 |
-| `verbose_json` | 含 `segments` 等详细信息 |
-
----
-
-## 七、与现有模型并行
-
-Whisper 占用约 3–8GB 内存，可与对话模型、jina-embed 等同时运行：
-
-```bash
+./manage.sh plan whisper-large-v3
 ./manage.sh start whisper-large-v3
-./manage.sh start jina-embed
-./manage.sh status
+./manage.sh status whisper-large-v3 --probe
 ```
 
----
+模型注册条目使用 `type: "asr"`，可配置 alias、default_port、repo_id、repo_name，以及 params.language / task / response_format。下载模式应包含 `*.json`、`*.npz`、`*.safetensors` 等实际权重文件；示例见 `models.json.example`。
 
-## 八、故障排查
+## API
 
-| 问题 | 处理 |
-|------|------|
-| `ffmpeg not found` | `brew install ffmpeg` |
-| 模型目录不存在 | `./manage.sh download whisper-large-v3` |
-| `No module named mlx_whisper` | 安装 `.venv-whisper` 依赖 |
-| 503 No running ASR models | 先 `./manage.sh start whisper-large-v3` |
-| 下载慢 | 检查 `.hf-env` 或 `HF_ENDPOINT` |
+```bash
+curl http://localhost:8888/v1/audio/transcriptions \
+  -H 'Authorization: Bearer <Key>' \
+  -F file=@short.wav -F model=whisper-large-v3 \
+  -F language=zh -F response_format=verbose_json
+```
 
----
+`response_format` 支持 text、json 和 verbose_json。multipart 中的音频始终按二进制处理，临时文件在成功和失败路径均会删除；verbose_json 可包含分段信息。
 
-## 九、相关文件
+ASR 在网关中使用独立 lane，默认并发 1；服务内也有推理锁。模型加载和端口绑定成功后才发布就绪状态。若选择其他解释器，通过 `runtime.python` 设置并检查启动 plan。
 
-| 文件 | 说明 |
-|------|------|
-| `serve_whisper.py` | ASR HTTP 服务 |
-| `requirements-whisper.txt` | mlx-whisper 依赖 |
-| `model_paths.py` | `dir_has_asr_weights()` 权重检测 |
-| `docs/architecture.md` | 系统架构 |
+## 验证
+
+```bash
+./scripts/test-services.sh --proxy 8888 --jina 8004 --whisper 8007 --audio /path/to/short.wav
+./manage.sh logs whisper-large-v3
+./manage.sh stop whisper-large-v3
+```
+
+401 检查 Key，503 检查已注册模型与服务就绪状态；`ffmpeg` 错误检查当前 Whisper 环境的 imageio-ffmpeg 安装。执行依赖升级时保留旧环境并使用候选目录，见 [升级指南](upgrade.md)。

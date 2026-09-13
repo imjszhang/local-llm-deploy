@@ -49,4 +49,3 @@ class ModelInstallation:
     quant: str | None = None
     revision: str | None = None
     complete: bool = False
-

@@ -1,149 +1,89 @@
 # Local LLM Deploy
 
-本地多模型部署，提供 OpenAI 兼容 API。支持 LLM 对话模型（llama.cpp）、Embedding 向量模型（sentence-transformers）、Rerank 与 Whisper ASR（mlx-whisper），可同时运行多个模型或按需启动。
+本机多模型推理的部署管理与 API 网关。支持 llama.cpp、Ollama、Transformers Embedding、MLX Rerank 和 mlx-whisper；当前主要验证平台为 macOS / Apple Silicon。
 
-## 已支持模型
-
-### 对话模型（Chat）
-
-| 模型（`manage.sh` 键名） | 完整型号 / 说明 | 默认端口 | 默认量化 | 磁盘占用 |
-|------|----------|----------|----------|----------|
-| `qwen3.8-27b-aggressive` | Qwen3.8-27B Uncensored HauhauCS Aggressive（GGUF，需较新 llama.cpp） | 8002 | Q5_K_P | ~20GB |
-| `qwen3.8:27b-mlx` | Qwen3.8 27B（Ollama MLX） | 11434 | nvfp4 | ~18GB |
-
-### Embedding / Rerank 模型
-
-| 模型 | 默认端口 | 格式 | 磁盘占用 |
-|------|----------|------|----------|
-| jina-embeddings-v5-text-small | 8004 | safetensors | ~1.4GB |
-| jina-reranker-v3-mlx | 8006 | MLX | ~1.4GB |
-
-### ASR 模型（Whisper）
-
-| 模型（`manage.sh` 键名） | 默认端口 | 格式 | 磁盘占用 |
-|------|----------|------|----------|
-| `whisper-large-v3` | 8007 | MLX (mlx-whisper) | ~3GB |
-
-新增模型：编辑本地 `models.json`，或使用 `./manage.sh registry merge <补丁.json>` / `registry remove` 等命令。模板见仓库内 `models.json.example`（含 `whisper-large-v3` 示例）。
+控制层使用 Python 标准库，不需要安装模型推理依赖。模型服务运行在各自的虚拟环境中。
 
 ## 快速开始
 
 ```bash
-# 0. 克隆 llama.cpp 并编译（对话模型需要）
-./init_llamacpp.sh
-./setup_llamacpp.sh
-
-# 1. 创建虚拟环境
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# 2. 生成本地 models.json（自 models.json.example）
+.venv/bin/python -m pip install 'pip==25.3'
+.venv/bin/python -m pip install -e .
 ./manage.sh registry init
-
-# 3. 下载模型（键名以你 registry 中的为准）
-./manage.sh download qwen3.8-27b-aggressive # 对话模型（Q5 GGUF，走 hf-mirror）
-./manage.sh download jina-embed             # Embedding 模型
-./manage.sh download whisper-large-v3       # Whisper ASR（需 ffmpeg + .venv-whisper）
-
-# 4. 启动模型
-# Qwen3.8 需要 2026-08 之后的 llama.cpp；旧树跑不了
-CPP_DIR="$PWD/work_dir/llama.cpp-qwen38" ./manage.sh start qwen3.8-27b-aggressive
-./manage.sh start jina-embed                # Embedding 模型
-./manage.sh start whisper-large-v3          # ASR 模型
-
-# 5. 查看状态
-./manage.sh status
-
-# 6. 启动前端（聊天 + 监控 + API 代理）
-./serve-ui.sh
-# 访问 http://localhost:8888/monitor.html
+./manage.sh config validate
+./manage.sh list
 ```
 
-## 管理命令
+已有 `models.json` 时跳过 `registry init`；重构不要求迁移已有权重或重写注册表。
+
+模型下载需要下载依赖，推理依赖按需安装，见 [部署指南](DEPLOY.md)。
 
 ```bash
-./manage.sh registry init                   # 首次从 models.json.example 生成 models.json
-./manage.sh registry list                   # 已注册的模型键
-./manage.sh registry merge patch.json       # 合并/覆盖顶层条目
-./manage.sh registry remove <键名>
-./manage.sh list                            # 已注册模型（简略）
-./manage.sh models                          # 各量化目录、体积与 manifest
-./manage.sh download <模型名> [--quant X]   # 下载模型
-./manage.sh remove <模型名> --quant X       # 删除某一量化目录（需先 stop）
-./manage.sh remove <模型名> --all           # 删除该模型全部已声明量化目录
-./manage.sh register <模型名> --path models/... [--quant X]  # 登记并行路径到 manifest
-./manage.sh start <模型名> [--port P]       # 启动模型
-./manage.sh stop <模型名>                   # 停止模型
-./manage.sh stop --all                      # 停止所有模型
-./manage.sh status                          # 查看运行中实例
-./manage.sh logs <模型名>                   # 查看模型日志
+.venv/bin/python -m pip install -e '.[download]'
+./manage.sh download <模型键> --dry-run
+./manage.sh download <模型键>
+./manage.sh plan <模型键>
+./manage.sh start <模型键>
+./manage.sh status --probe
+./serve-ui.sh start
 ```
 
-并行下载（`download --to`）会写入 `models/.manifest.json`（位于 `models/` 下，默认已被忽略）；`./manage.sh models` 会列出 manifest 条目。
+访问 [监控页面](http://localhost:8888/monitor.html)。如果配置了 `.api-key`，在页面中填写 API Key 后读取模型详情；Key 只保存在当前页面内存中。
 
-## API 接口
+## 日常管理
 
-统一通过 `serve-ui.py`（端口 8888）代理，自动按 `model` 字段路由到对应后端。
+```bash
+./manage.sh registry list
+./manage.sh registry merge patch.json
+./manage.sh config show --resolved
+./manage.sh models --json
+./manage.sh register <模型键> --path models/<安装目录> --quant <量化>
+./manage.sh start <模型键> --port 8002 --model-dir models/<安装目录>
+./manage.sh stop <模型键>
+./manage.sh stop --all
+./manage.sh logs <模型键>
+./manage.sh remove <模型键> --quant <量化> --dry-run
+```
 
-### 对话
+`list/status/models` 为只读查询，失效 PID 记录由 `reconcile` 显式清理。Ollama 与外部服务默认只连接，不由 `stop --all` 停止。
+
+## 统一 API
 
 ```bash
 curl http://localhost:8888/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <你的API-Key>" \
-  -d '{"model":"qwen3.8-27b-aggressive","messages":[{"role":"user","content":"你好"}]}'
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <API-Key>' \
+  -d '{"model":"<模型键或别名>","messages":[{"role":"user","content":"你好"}]}'
 ```
 
-### Embedding
+网关提供 Chat、Embedding、Rerank 和 Whisper 路由。显式未知模型返回 404，离线模型返回 503。省略 `model` 时必须配置明确的默认模型；不存在默认配置时返回 400。
+
+同一模型可通过注册表 `default_for: ["chat"]` 或 `DEFAULT_CHAT_MODEL` 等环境变量成为默认模型。模型的能力和具体后端分别声明，新增同类模型通常只需要修改注册表。
+
+## 引擎更新
+
+llama.cpp 的源码与模型权重分开管理。新构建采用明确 commit，旧构建保留用于回退。
 
 ```bash
-curl http://localhost:8888/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <你的API-Key>" \
-  -d '{"model":"jina-embeddings-v5-text-small","input":["文本1","文本2"]}'
+./manage.sh engine register stable --directory /path/to/verified/llama.cpp --default
+./manage.sh engine update candidate --revision <40位commit>
+./manage.sh engine verify candidate
+# 按 upgrade.md 完成真实模型验证后再选择默认版本
+./manage.sh engine use candidate
+./manage.sh engine rollback
 ```
 
-Embedding 接口额外支持：
-- `task` — 切换 LoRA adapter：`text-matching`（默认）、`retrieval`、`classification`、`clustering`
-- `dimensions` — Matryoshka 维度截断（32 ~ 1024）
-
-### ASR（Whisper）
-
-```bash
-curl http://localhost:8888/v1/audio/transcriptions \
-  -H "Authorization: Bearer <你的API-Key>" \
-  -F file=@audio.mp3 \
-  -F model=whisper-large-v3 \
-  -F language=zh
-```
-
-详见 [docs/whisper-guide.md](docs/whisper-guide.md)。
-
-## 多模型同时运行
-
-```bash
-CPP_DIR="$PWD/work_dir/llama.cpp-qwen38" ./manage.sh start qwen3.8-27b-aggressive  # 对话，端口 8002
-./manage.sh start jina-embed                # Embedding，端口 8004
-./manage.sh start jina-rerank-mlx           # Rerank，端口 8006
-
-./manage.sh status                          # 查看所有实例
-./manage.sh stop --all                      # 停止全部
-```
-
-## 本地配置（可选）
-
-启用 API Key 认证时，可复制模板并填入密钥：
-
-```bash
-cp .api-key.example .api-key
-# 编辑 .api-key 填入实际 key（该文件已被 .gitignore 忽略，不会提交）
-```
-
-使用 `--source huggingface` 下载时，若未设置环境变量 `HF_ENDPOINT`，下载逻辑会默认使用 `https://hf-mirror.com`（由 `download_model.py` 处理）。需要官方 Hub 时执行 `export HF_ENDPOINT=https://huggingface.co`。可将 `cp .hf-env.example .hf-env` 后按需编辑，`download_model.py` 会读取 `.hf-env`。
+模型可设置 `engine_profile` 绑定特定构建，`CPP_DIR` / `--cpp-dir` 仍可覆盖。详见 [升级指南](docs/upgrade.md)。
 
 ## 文档
 
-- [DEPLOY.md](DEPLOY.md) — 完整部署指南
-- [docs/architecture.md](docs/architecture.md) — 架构说明
-- [docs/whisper-guide.md](docs/whisper-guide.md) — Whisper ASR 使用指南
+- [架构与模块职责](docs/architecture.md)
+- [部署与环境安装](DEPLOY.md)
+- [API 与认证](docs/api-guide.md)
+- [开发和测试](docs/development.md)
+- [迁移说明](docs/migration.md)
+- [兼容契约](docs/compatibility.md)
+- [升级与回退](docs/upgrade.md)
+- [验证记录](docs/validation.md)
+- [重构计划](docs/refactoring-plan.md)

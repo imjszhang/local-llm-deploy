@@ -1,165 +1,78 @@
-# Local LLM Deploy 系统架构说明
+# 架构与模块职责
 
-> 文档更新时间：2026-03-01
+更新：2026-09-13。
 
----
+## 运行结构
 
-## 一、系统概览
-
-Local LLM Deploy 采用**多实例部署架构**：聊天模型每个运行一个独立的 llama-server 进程，Embedding 模型由 `serve_embedding.py` 提供，ASR 模型由 `serve_whisper.py`（mlx-whisper）提供，通过 `manage.sh` 统一管理，`serve-ui.py` 前端代理自动路由到各后端，并支持 OpenAI 兼容 `/v1/*` 与推理请求队列。
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    用户 / OpenAI 客户端                            │
-│                                                                  │
-│  http://localhost:8001/v1 (GLM-5)   http://localhost:8002/v1 (Qwen3.5-397B-A17B)  │
-│  http://localhost:8003/v1 (MiniMax) http://localhost:8004/v1 (jina-embed) │
-│  http://localhost:8007/v1 (whisper) http://localhost:8888/ (前端 + 统一代理) │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      宿主机推理服务                                │
-│                                                                  │
-│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐    │
-│  │ llama-server    │ │ llama-server    │ │ llama-server    │    │
-│  │ (GLM-5) :8001   │ │ (Qwen3.5-397B-A17B) :8002 │ │ (MiniMax) :8003 │    │
-│  │ run/glm-5.pid   │ │ run/qwen3.5.pid │ │ run/minimax.pid │    │
-│  └─────────────────┘ └─────────────────┘ └─────────────────┘    │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │ serve_embedding.py (jina-embeddings-v5) :8004  run/jina-embed.pid │
-│  └─────────────────────────────────────────────────────────────┘ │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │ serve_whisper.py (whisper-large-v3 MLX) :8007  run/whisper-large-v3.pid │
-│  └─────────────────────────────────────────────────────────────┘ │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │  serve-ui.py (前端 + API 代理)  端口: 8888                    │ │
-│  │  /v1/models, /v1/chat/completions, /v1/embeddings, /v1/audio/transcriptions (OpenAI 兼容，按 model 路由) │
-│  │  /api/models → 运行中模型列表（含队列状态）                    │ │
-│  │  /api/<model>/* → 路由到对应后端  对话快车道互斥 + embed/ASR 分门   │
-│  │  /knowledge/* → 知识库反代（KNOWLEDGE_COLLECTOR_URL，非模型 API） │
-│  └──────────────────────────────────────────────────────────────┘ │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │  models.json (模型注册中心)   manage.sh (list/download/start/stop/status/logs) │
-│  └──────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
+```text
+客户端 / static/monitor.html
+             │
+             ▼
+       gateway :8888
+   配置快照、发现、路由
+      调度、认证、转发
+             │
+     ┌───────┼──────────────┐
+     ▼       ▼              ▼
+ llama.cpp / Ollama    Python 模型服务
+                     Embedding / Rerank / ASR
+                           │
+                           ▼
+                      已登记的本地权重
 ```
 
----
+网关是单个多线程进程；全局 lane 和每模型 KV 预算均在该进程内生效。多个网关进程之间不共享预算，不应将多 worker 当成无成本扩容方式。网关和 CLI 不导入 Torch、MLX 或模型代码。
 
-## 二、服务组件
+## 三种对象
 
-| 组件 | 端口 | 说明 |
-|------|------|------|
-| **llama-server** (每聊天模型一个) | 由 models.json 的 default_port 配置 | C++ 推理引擎，OpenAI 兼容 API，加载 GGUF |
-| **serve_embedding.py** | 默认 8004 | Embedding 服务（如 jina-embeddings-v5），OpenAI 兼容 /v1/embeddings |
-| **serve_whisper.py** | 默认 8007 | ASR 服务（mlx-whisper），OpenAI 兼容 /v1/audio/transcriptions |
-| **serve-ui.py** | 8888 (UI_PORT) | 前端静态服务 + 多模型 API 代理 + 推理队列；支持 /v1/*、/api/*，以及 /knowledge/ 知识库反代 |
-| **manage.sh** | - | 统一 CLI：list / download / start / stop / status / logs |
+- `ModelSpec`：配置中的逻辑模型，描述 key、alias、capabilities、backend、management 及后端参数。
+- `ModelInstallation`：权重的实际安装路径、量化、revision 和完整性。由同一个解析器服务于启动、下载和清单。
+- `InstanceObservation`：服务实例的只读观测，包含进程身份、地址、运行方式、健康与状态。启动命令使用 `ServiceSpec`，不把模型定义当作进程状态。
 
----
+旧 `type` 在 `config.normalize_models` 中映射成独立的能力与后端。`embedding/rerank/asr` 是能力，`ollama/external` 则表示旧配置中的实现或管理方式。所有调用方使用这个统一转换。
 
-## 三、数据流
+## 模块边界
 
-```
-OpenAI Client / curl → serve-ui(:8888)/v1/* 或 直连 llama-server(:800x)
-                              ↓
-               serve-ui 按请求体 model 或 URL /api/<model>/* 路由
-                              ↓
-               llama-server / serve_embedding / serve_whisper → 模型文件 (GGUF / safetensors / MLX)
-                              ↓
-OpenAI Client / curl ← JSON 或 SSE 流 ←
+| 模块 | 职责 |
+| --- | --- |
+| `config.py` / `domain.py` | 项目路径、模型校验、共享数据结构 |
+| `registry.py` / `storage.py` | 原子注册表更新、缓存、文件锁 |
+| `artifacts/paths.py` | 默认路径、安装选择、量化与 GGUF 分片检查 |
+| `artifacts/manifest.py` | 安装登记，保留 version=1 清单格式 |
+| `artifacts/download.py` / `inventory.py` | 下载计划、执行、安装列表及受保护的删除 |
+| `backends/builders.py` | 从模型配置构造 argv、环境、解释器和就绪检查 |
+| `lifecycle/` | process / launchd 执行、身份校验、就绪发布、停止、reconcile |
+| `gateway/discovery.py` / `routing.py` | 在线后端发现、能力与端点匹配、别名和默认模型 |
+| `gateway/scheduling.py` | 原子分配 lane 与模型预算，排队优先级、占用释放 |
+| `gateway/transport.py` | HTTP、SSE、保活、有界缓冲、断开与不确定状态 |
+| `gateway/auth.py` / `knowledge.py` | 模型 Key 策略与独立知识库凭据转发 |
+| `gateway/monitoring.py` / `observability.py` | 资源观测、状态字段、请求 ID、有限日志采集 |
+| `services/` | 共享 HTTP 边界及三种独立模型适配器 |
+| `engines.py` | 固定版本构建档案、验证、切换与回退 |
+| `cli.py` | 对外命令、错误呈现、应用编排 |
 
-浏览器 → serve-ui(:8888) → 静态页 (monitor.html, chat.html 等)
-                          → /api/models → 运行中模型列表与队列状态
-                          → /v1/chat/completions 等 → 后端（对话跨模型互斥 1 路）
-                          → /knowledge/ → 反代本机 OpenClaw 知识库（默认 127.0.0.1:18789/plugins/js-knowledge）
-```
+根目录旧脚本都是启动包装，源码代码位于 `src/local_llm_deploy/`。`bootstrap.py` 让已有绝对脚本路径从任意工作目录继续运行；安装后的 `local-llm` 命令通过 `--project-root` 或 `LOCAL_LLM_ROOT` 指定部署目录。
 
----
+## 路由与请求生命周期
 
-## 四、模型管理
+1. 校验模型 API 凭据、请求大小与协议。
+2. 将路径映射为能力，按 key / alias / 后端 ID 选择明确后端。
+3. 验证后端在线、能力及端点声明。
+4. 原子申请对应 lane 与模型预算；等待期间保留顺序和流式优先级。
+5. 转发请求、保活并返回上游结果，资源只释放一次。
 
-### models.json 结构
+Chat 默认并发 1；Embedding 为 2；Rerank 和 ASR 各为 1。Embedding 内部仍以锁保护 adapter 切换和计算，Whisper/Rerank 也保留模型推理锁。KV 是估算的 token 预算，不是实测显存上限。`queue_depth` 为在途请求数，包含活动请求；监控另行呈现等待数。
 
-- **聊天模型**：`repo_id`、`repo_name`（可选）、`full_model_name`（可选，人类可读完整型号，供 `manage.sh list/status` 展示）、`quants`（量化及 size_gb）、`alias`（llama-server --alias）、`default_port`、`params`（temp、top_p、ctx_size、n_predict、extra_args 等）；可选 `chat_template_file`、`mmproj` 等。
-- **Embedding 模型**：`"type": "embedding"`、`repo_id`、`alias`、`default_port`、`params`（如 dimensions、default_task）；无 `quants`，由 `serve_embedding.py` 加载 safetensors。
-- **ASR 模型**：`"type": "asr"`、`repo_id`（MLX Community Whisper）、`alias`、`default_port`、`params`（language、task、response_format）；由 `serve_whisper.py` + mlx-whisper 加载。
+下游断开后不等于上游计算结束。传输层会尝试取消/完成清理，无法确认完成的任务保留占用并标记 uncertain。恢复时先确认后端空闲或重启后端，再重启网关；单独重启网关不能证明上游已停止。异常退出后的跨进程占用恢复仍需这个操作顺序。
 
-### 进程管理
+## 配置和状态
 
-| 文件 | 用途 |
-|------|------|
-| `run/<model>.pid` | PID 文件：第一行 PID，第二行端口，第三行模型/别名（供 serve-ui 路由与展示） |
-| `logs/<model>.log` | 独立日志文件 |
+注册表约 30 秒重新校验，成功后原子替换；无效更新保留上一有效配置。已存在模型的并发/KV 上限及网关运行环境采用重启生效，避免活动请求释放到另一份预算对象；新模型可在刷新后注册。
 
----
+`run/<model>.pid` 前三行仍是 PID、port、alias。新增可选第四行 JSON，记录进程启动时间、命令摘要、管理方式和就绪信息。旧格式以保守身份检查兼容。查询不清理记录；启动成功才发布 ready；停止前确认归属。launchd 的 PID 变化会重新核对其命令身份。
 
-## 五、已注册模型
+新的 LaunchAgent 启动轻量 `lifecycle.runner`，它复用前台管理器，按安装锁、实例锁的顺序启动后端并独立发布 ready。由登录自启触发时同样服从删除锁；外层 start 只等待对应启动 token 和 supervisor 身份，避免父子争用锁。plist 保存启动配置，权限 0600；运行记录仍只有 PID 文件。无 PID 时可从当前项目拥有的已加载 job 只读观察 starting 状态。
 
-| 模型 | 类型 | 端口 | 量化/说明 | 大小 |
-|------|------|------|-----------|------|
-| glm-5 | chat | 8001 | UD-IQ2_XXS, UD-TQ1_0 | 241GB / 176GB |
-| qwen3.5 | chat | 8002 | **完整型号：Qwen3.5-397B-A17B**（MoE；`repo_id`：`unsloth/Qwen3.5-397B-A17B-GGUF`）。量化：MXFP4_MOE, UD-Q4_K_XL, UD-Q2_K_XL；含 chat_template、mmproj | 214GB / 214GB / 120GB |
-| minimax | chat | 8003 | BF16 | 457GB |
-| jina-embed | embedding | 8004 | jina-embeddings-v5-text-small (safetensors) | - |
-| whisper-large-v3 | asr | 8007 | mlx-community/whisper-large-v3-mlx | ~3GB |
+模型权重保留在 `models/`，manifest 明确选择安装路径。同量化多安装不任意选取，需 `--model-dir`。下载、启动和删除使用协调锁，清单更新使用独立读改写锁。外部服务与模型 API 代理的生命周期归属分开。
 
----
-
-## 六、关键文件与文档
-
-| 文件 | 说明 |
-|------|------|
-| `models.json` | 本地模型注册中心（默认 gitignore） |
-| `models.json.example` | 注册表示例模板 |
-| `registry_cli.py` | `./manage.sh registry *` 实现 |
-| `manage.sh` | 统一 CLI 入口 |
-| `deploy.sh` | 聊天模型部署（llama-server） |
-| `download.sh` / `download_model.py` | 统一模型下载（GGUF 对话模型与 embedding） |
-| `model_paths.py` | 本地权重路径推导与检测（与 `manage.sh` / `model_inventory` 一致） |
-| `model_inventory.py` | `manage.sh models` / `remove` / `register`；`models/.manifest.json` |
-| `serve-ui.py` | 前端 + 多模型代理 + 推理队列；/v1/* 与 /api/* |
-| `serve_embedding.py` | Embedding 服务（jina） |
-| `serve_whisper.py` | ASR 服务（mlx-whisper） |
-| `requirements-whisper.txt` | ASR 专用 Python 依赖 |
-| `.api-key` | 可选；存在时 /v1/* 需 Bearer 认证 |
-| `docs/whisper-guide.md` | Whisper ASR 使用指南 |
-| `docs/api-guide.md` | 外部调用 serve-ui 接口的使用指南 |
-
----
-
-## 七、常用运维命令
-
-```bash
-# 模型列表与状态
-./manage.sh registry init    # 首次克隆后生成 models.json
-./manage.sh registry list
-./manage.sh list
-./manage.sh models
-./manage.sh status
-
-# 下载与启动（聊天模型 / embedding 均通过 manage.sh）
-./manage.sh download glm-5
-./manage.sh start glm-5
-./manage.sh start qwen3.5   # 配置键 qwen3.5 → Qwen3.5-397B-A17B
-./manage.sh start minimax
-./manage.sh start jina-embed
-./manage.sh start whisper-large-v3
-
-# 停止
-./manage.sh stop glm-5
-./manage.sh stop --all
-
-# 日志
-./manage.sh logs glm-5
-
-# 监控（直连后端）
-./monitor.sh health --model glm-5
-./monitor.sh metrics --model qwen3.5   # Qwen3.5-397B-A17B
-
-# 前端与统一 API（代理 + 推理队列）
-./serve-ui.sh
-# 访问 http://localhost:8888/ → monitor.html；API 见 docs/api-guide.md
-```
+`/knowledge/` 仅反向代理外部知识库，转发客户端 Authorization；它不是本仓库的 RAG 或知识库实现。
