@@ -1,0 +1,2 @@
+# Cross-platform tooling used by the core CI suite.
+ruff==0.16.7

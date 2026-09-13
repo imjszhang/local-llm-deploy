@@ -1,0 +1,1 @@
+# Core has no third-party runtime dependencies. Python >=3.9.
