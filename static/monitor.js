@@ -1,0 +1,569 @@
+
+    const ORIGIN = window.location.origin || 'http://localhost:8888';
+
+    // Credentials live only in this page's memory, never in browser storage.
+    let apiKey = '';
+    function gatewayFetch(url, options = {}) {
+        const target = new URL(url, ORIGIN);
+        const headers = new Headers(options.headers || {});
+        if (apiKey && target.origin === ORIGIN &&
+            (target.pathname.startsWith('/api/') || target.pathname.startsWith('/v1/'))) {
+            headers.set('Authorization', 'Bearer ' + apiKey);
+        }
+        return fetch(url, {...options, headers}).then(response => {
+            if (response.status === 401) {
+                document.getElementById('authStatus').textContent = '请填写有效 API Key 以查看模型详情。';
+            }
+            return response;
+        });
+    }
+    document.getElementById('apiAuthForm').addEventListener('submit', event => {
+        event.preventDefault();
+        const field = document.getElementById('apiKeyInput');
+        apiKey = field.value.trim();
+        field.value = '';
+        document.getElementById('authStatus').textContent = apiKey ? '已应用到本页会话；刷新页面后清除。' : '当前未提供 API Key。';
+        fetchAllModelDetails();
+    });
+    document.getElementById('clearApiKey').addEventListener('click', () => {
+        apiKey = '';
+        document.getElementById('apiKeyInput').value = '';
+        document.getElementById('authStatus').textContent = '已清除 API Key。';
+    });
+
+    const CIRC = 2 * Math.PI * 30;
+    const SPARK_MAX = 60;
+    const POLL_SYS = 5000;
+    const POLL_MODELS = 10000;
+    const POLL_INFER_IDLE = 10000;
+    const POLL_INFER_BUSY = 3000;
+    const MONITOR_TIMEOUT = 10000;
+
+    const sparkData = { cpu: [], mem: [] };
+    let modelsData = { models: [], ollama: null, global: {} };
+    let hasProcessing = false;
+    let timers = {};
+    let expandedModels = new Set();
+
+    // ── Utilities ──
+
+    function escapeHtml(s) {
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function parseThinkingAndContent(gen) {
+        const m = gen.match(/<think>([\s\S]*?)(?:<\/think>|$)/);
+        const thinking = m ? m[1].trim() : '';
+        const after = m ? gen.slice(gen.indexOf(m[0]) + m[0].length) : gen;
+        const content = after.replace(/^[\s\n]+/, '').trim();
+        return { thinking, content };
+    }
+
+    function fmtGB(v) { return v >= 1024 ? (v/1024).toFixed(1) + 'T' : v.toFixed(1) + 'G'; }
+
+    function fetchJ(url, timeout) {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), timeout || MONITOR_TIMEOUT);
+        return gatewayFetch(url, { signal: ctrl.signal, headers: { Accept: 'application/json' } })
+            .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .finally(() => clearTimeout(t));
+    }
+
+    function fetchText(url, timeout) {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), timeout || MONITOR_TIMEOUT);
+        return gatewayFetch(url, { signal: ctrl.signal })
+            .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+            .finally(() => clearTimeout(t));
+    }
+
+    // ── SVG Ring ──
+
+    function setRing(id, pct, color) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const offset = CIRC * (1 - Math.min(pct, 100) / 100);
+        el.style.strokeDasharray = CIRC;
+        el.style.strokeDashoffset = offset;
+        if (color) el.style.stroke = color;
+    }
+
+    function ringColor(pct) {
+        if (pct > 85) return 'var(--error)';
+        if (pct > 65) return 'var(--warn)';
+        return 'var(--accent)';
+    }
+
+    // ── Sparkline ──
+
+    function pushSpark(key, val) {
+        sparkData[key].push(val);
+        if (sparkData[key].length > SPARK_MAX) sparkData[key].shift();
+    }
+
+    function drawSpark(canvasId, data, color) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas || !data.length) return;
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+        const w = rect.width, h = rect.height;
+        ctx.clearRect(0, 0, w, h);
+        const max = 100;
+        const step = w / (SPARK_MAX - 1);
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.lineJoin = 'round';
+        for (let i = 0; i < data.length; i++) {
+            const x = i * step;
+            const y = h - (data[i] / max) * h;
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        // fill area
+        ctx.lineTo((data.length - 1) * step, h);
+        ctx.lineTo(0, h);
+        ctx.closePath();
+        ctx.fillStyle = color.replace(')', ', 0.08)').replace('rgb', 'rgba');
+        ctx.fill();
+    }
+
+    // ── System resources ──
+
+    async function fetchSystem() {
+        try {
+            const d = await fetchJ(ORIGIN + '/api/system');
+            const cpuUsed = +(d.cpu.user + d.cpu.sys).toFixed(1);
+            document.getElementById('cpuLabel').textContent = cpuUsed + '%';
+            setRing('cpuRing', cpuUsed, ringColor(cpuUsed));
+            pushSpark('cpu', cpuUsed);
+            drawSpark('cpuSpark', sparkData.cpu, 'rgb(34,197,94)');
+
+            const memPct = d.memory.total_gb > 0 ? +((d.memory.used_gb / d.memory.total_gb) * 100).toFixed(1) : 0;
+            document.getElementById('memLabel').textContent = memPct + '%';
+            setRing('memRing', memPct, ringColor(memPct));
+            pushSpark('mem', memPct);
+            drawSpark('memSpark', sparkData.mem, 'rgb(99,102,241)');
+
+            document.getElementById('loadAvg').textContent = d.load_avg.map(v => v.toFixed(2)).join('  ');
+
+            renderMemBar(d);
+
+            document.getElementById('connDot').className = 'conn-dot ok';
+            document.getElementById('connText').textContent = '已连接';
+        } catch (e) {
+            document.getElementById('connDot').className = 'conn-dot err';
+            document.getElementById('connText').textContent = '断开';
+        }
+        document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('zh-CN');
+        schedulePoll('sys', fetchSystem, POLL_SYS);
+    }
+
+    function renderMemBar(sysData) {
+        const total = sysData.memory.total_gb || 1;
+        const segments = [];
+        const colors = ['#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e', '#22c55e', '#14b8a6'];
+        let colorIdx = 0;
+        let accounted = 0;
+
+        // llama-server processes
+        for (const p of (sysData.processes.llama_server || [])) {
+            const c = colors[colorIdx++ % colors.length];
+            segments.push({ label: p.model || ('llama:' + p.pid), gb: p.rss_gb, color: c });
+            accounted += p.rss_gb;
+        }
+        // Ollama processes
+        let ollamaTotal = 0;
+        for (const p of (sysData.processes.ollama || [])) ollamaTotal += p.rss_gb;
+        if (ollamaTotal > 0.01) {
+            segments.push({ label: 'Ollama', gb: ollamaTotal, color: '#f97316' });
+            accounted += ollamaTotal;
+        }
+        // Other used
+        const otherUsed = Math.max(0, sysData.memory.used_gb - accounted);
+        if (otherUsed > 0.5) {
+            segments.push({ label: '系统 + 其他', gb: otherUsed, color: '#52525b' });
+        }
+        // Free
+        segments.push({ label: '可用', gb: sysData.memory.free_gb, color: '#27272a' });
+
+        const bar = document.getElementById('memBar');
+        bar.innerHTML = '';
+        for (const s of segments) {
+            const pct = (s.gb / total) * 100;
+            if (pct < 0.1) continue;
+            const div = document.createElement('div');
+            div.style.width = pct + '%';
+            div.style.background = s.color;
+            div.title = s.label + ': ' + fmtGB(s.gb);
+            bar.appendChild(div);
+        }
+
+        const legend = document.getElementById('memLegend');
+        legend.innerHTML = segments.filter(s => s.gb > 0.1).map(s =>
+            `<span style="--c:${s.color}"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${s.color};margin-right:4px;vertical-align:middle"></span>${s.label} ${fmtGB(s.gb)}</span>`
+        ).join('');
+        document.getElementById('memTotalBadge').textContent = fmtGB(total) + ' 总计';
+    }
+
+    // ── Models + Ollama ──
+
+    async function fetchModels() {
+        try {
+            modelsData = await fetchJ(ORIGIN + '/api/models');
+        } catch(e) {
+            // keep old data
+        }
+        renderLlamaSection();
+        renderOllamaSection();
+        schedulePoll('models', fetchModels, POLL_MODELS);
+    }
+
+    function renderLlamaSection() {
+        const models = modelsData.models || [];
+        const lanes = modelsData.lanes || {};
+        const chat = lanes.chat || modelsData.global || {};
+        const embed = lanes.embed || {};
+        const asr = lanes.asr || {};
+        const rerank = lanes.rerank || {};
+        document.getElementById('llamaCount').textContent = models.length + ' 个模型';
+        document.getElementById('globalGate').textContent =
+            `对话 ${chat.active||0}/${chat.max||'-'} · embed ${embed.active||0}/${embed.max||'-'} · rerank ${rerank.active||0}/${rerank.max||'-'} · asr ${asr.active||0}/${asr.max||'-'}`;
+
+        const uncertain = modelsData.uncertain_backends || [];
+        const unavailable = Object.entries(modelsData.unavailable_backends || {});
+        const warning = document.getElementById('backendUncertain');
+        const notices = uncertain.length ? ['以下后端的任务结束状态无法确认，已保留并发占用：' + uncertain.join('、') + '。确认空闲，或先重启后端再重启网关后恢复。'] : [];
+        for (const [name, reason] of unavailable) notices.push(name + '：' + reason);
+        warning.hidden = !notices.length;
+        warning.textContent = notices.join(' ');
+        const grid = document.getElementById('llamaGrid');
+        if (!models.length) {
+            grid.innerHTML = '<div class="muted-text">无运行中的推理后端（llama-server / Ollama / 外部 ds4 等）</div>';
+            return;
+        }
+        grid.innerHTML = '';
+        for (const m of models) {
+            const card = document.createElement('div');
+            card.className = 'model-card';
+            card.id = 'mc-' + m.name;
+            const expanded = expandedModels.has(m.name);
+            card.innerHTML = `
+                <div class="model-head" onclick="toggleModel('${m.name}')">
+                    <span class="model-name">${escapeHtml(m.model || m.name)}</span>
+                    <span class="model-head-right">
+                        <span>:${m.port}</span>
+                        ${m.budget && m.budget.uncertain ? '<span class="badge warn">等待确认</span>' : ''}
+                        ${m.ollama ? '<span class="badge" style="background:#f97316">Ollama</span>' : ''}
+                        ${m.external && !m.ollama ? '<span class="badge info">外部</span>' : ''}
+                        <span class="conn-dot" id="health-${m.name}"></span>
+                        <span id="slots-summary-${m.name}">-</span>
+                        ${m.queue > 0 ? `<span class="badge warn">在途 ${m.queue}</span>` : ''}
+                    </span>
+                </div>
+                <div class="model-body ${expanded ? '' : 'collapsed'}" id="body-${m.name}">
+                    ${renderBudgetBar(m)}
+                    <div id="metrics-${m.name}" class="muted-text" style="font-size:0.75rem">加载中...</div>
+                    <div id="slots-${m.name}"></div>
+                </div>
+            `;
+            grid.appendChild(card);
+        }
+        fetchAllModelDetails();
+    }
+
+    function renderBudgetBar(m) {
+        if (!m.budget) return '';
+        const pct = m.budget.total > 0 ? ((m.budget.used / m.budget.total) * 100).toFixed(1) : 0;
+        return `<div style="margin-bottom:0.5rem">
+            <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--muted);margin-bottom:0.15rem">
+                <span>KV Cache</span>
+                <span>${(m.budget.used/1024).toFixed(0)}K / ${(m.budget.total/1024).toFixed(0)}K tokens (${pct}%)</span>
+            </div>
+            <div class="progress-bar"><div style="width:${pct}%;background:var(--info)"></div></div>
+        </div>`;
+    }
+
+    function toggleModel(name) {
+        const body = document.getElementById('body-' + name);
+        if (!body) return;
+        if (body.classList.contains('collapsed')) {
+            body.classList.remove('collapsed');
+            expandedModels.add(name);
+        } else {
+            body.classList.add('collapsed');
+            expandedModels.delete(name);
+        }
+    }
+
+    // ── Per-model detail fetch ──
+
+    const METRIC_LABELS = {
+        'llamacpp:prompt_tokens_seconds': 'Prompt 吞吐',
+        'llamacpp:predicted_tokens_seconds': '生成吞吐',
+        'llamacpp:prompt_tokens_total': 'Prompt Tokens',
+        'llamacpp:tokens_predicted_total': '生成 Tokens',
+        'llamacpp:requests_processing': '处理中请求',
+        'llamacpp:requests_deferred': '排队请求',
+        'llamacpp:n_tokens_max': '最大上下文',
+    };
+
+    function parseMetrics(text) {
+        const m = {};
+        for (const line of text.split('\n')) {
+            if (!line.startsWith('llamacpp:')) continue;
+            const match = line.match(/^(llamacpp:[^\s{]+)\s*(?:\{[^}]*\})?\s+([\d.e+-]+)/);
+            if (match) m[match[1]] = parseFloat(match[2]);
+        }
+        return m;
+    }
+
+    async function fetchAllModelDetails() {
+        const models = modelsData.models || [];
+        hasProcessing = false;
+        await Promise.allSettled(models.map(m => fetchModelDetail(m)));
+        schedulePoll('infer', fetchAllModelDetails, hasProcessing ? POLL_INFER_BUSY : POLL_INFER_IDLE);
+    }
+
+    async function fetchModelDetail(m) {
+        const base = ORIGIN + '/api/' + m.name;
+
+        if (m.external) {
+            try {
+                const hr = await gatewayFetch(base + '/v1/models', { signal: AbortSignal.timeout(MONITOR_TIMEOUT) });
+                const dot = document.getElementById('health-' + m.name);
+                if (dot) dot.className = 'conn-dot ' + (hr.ok ? 'ok' : 'err');
+            } catch (e) {
+                const dot = document.getElementById('health-' + m.name);
+                if (dot) dot.className = 'conn-dot err';
+            }
+            const el = document.getElementById('metrics-' + m.name);
+            if (m.ollama) {
+                const o = modelsData.ollama || {};
+                const tag = m.ollama_model || m.model;
+                const loaded = (o.loaded || []).find(x => x.name === tag);
+                const avail = (o.available || []).find(x => x.name === tag);
+                let html = '<div class="muted-text">Ollama 后端（OpenAI /v1/*）</div>';
+                if (loaded) {
+                    const vramPct = loaded.size_gb > 0 ? ((loaded.vram_gb / loaded.size_gb) * 100).toFixed(0) : 0;
+                    html += `<div class="metric-row"><span>状态</span><span class="val">已加载</span></div>`;
+                    html += `<div class="metric-row"><span>VRAM</span><span class="val">${fmtGB(loaded.vram_gb)} / ${fmtGB(loaded.size_gb)} (${vramPct}%)</span></div>`;
+                    if (loaded.quantization) html += `<div class="metric-row"><span>量化</span><span class="val">${escapeHtml(loaded.quantization)}</span></div>`;
+                } else if (avail) {
+                    html += `<div class="metric-row"><span>状态</span><span class="val">按需加载</span></div>`;
+                    html += `<div class="metric-row"><span>磁盘</span><span class="val">${fmtGB(avail.size_gb)}</span></div>`;
+                }
+                if (el) el.innerHTML = html;
+            } else if (el) {
+                el.innerHTML = '<div class="muted-text">外部后端（无 llama.cpp /metrics）</div>';
+            }
+            const summary = document.getElementById('slots-summary-' + m.name);
+            if (summary) summary.textContent = m.ollama ? 'Ollama' : '—';
+            const container = document.getElementById('slots-' + m.name);
+            if (container) {
+                container.innerHTML = m.ollama
+                    ? '<div class="muted-text" style="margin-top:0.5rem">经 serve-ui 路由至 Ollama /v1/chat/completions</div>'
+                    : '<div class="muted-text" style="margin-top:0.5rem">外部后端无 /slots 视图</div>';
+            }
+            return;
+        }
+
+        // health (llama-server)
+        try {
+            const hr = await gatewayFetch(base + '/health', { signal: AbortSignal.timeout(MONITOR_TIMEOUT) });
+            const dot = document.getElementById('health-' + m.name);
+            if (dot) dot.className = 'conn-dot ' + (hr.ok ? 'ok' : 'err');
+        } catch(e) {
+            const dot = document.getElementById('health-' + m.name);
+            if (dot) dot.className = 'conn-dot err';
+        }
+
+        // metrics
+        try {
+            const text = await fetchText(base + '/metrics');
+            const parsed = parseMetrics(text);
+            const el = document.getElementById('metrics-' + m.name);
+            if (el) {
+                const rows = Object.entries(METRIC_LABELS)
+                    .filter(([k]) => k in parsed)
+                    .map(([k, label]) => {
+                        let v = parsed[k];
+                        const unit = label.includes('吞吐') ? ' t/s' : '';
+                        const display = (typeof v === 'number' && v % 1) ? v.toFixed(2) : v;
+                        return `<div class="metric-row"><span>${label}</span><span class="val">${display}${unit}</span></div>`;
+                    }).join('');
+                el.innerHTML = rows || '<div class="muted-text">无指标数据</div>';
+            }
+        } catch(e) {
+            const el = document.getElementById('metrics-' + m.name);
+            if (el) el.innerHTML = '<div class="muted-text">指标获取超时（推理中）</div>';
+        }
+
+        // slots
+        try {
+            const slots = await fetchJ(base + '/slots');
+            if (!Array.isArray(slots)) return;
+            const busy = slots.filter(s => s.is_processing).length;
+            if (busy > 0) hasProcessing = true;
+            const card = document.getElementById('mc-' + m.name);
+            if (card) { if (busy > 0) card.classList.add('busy'); else card.classList.remove('busy'); }
+            const summary = document.getElementById('slots-summary-' + m.name);
+            if (summary) summary.textContent = `${busy}/${slots.length} 槽位`;
+            // auto-expand if busy
+            if (busy > 0 && !expandedModels.has(m.name)) {
+                expandedModels.add(m.name);
+                const body = document.getElementById('body-' + m.name);
+                if (body) body.classList.remove('collapsed');
+            }
+            const container = document.getElementById('slots-' + m.name);
+            if (!container) return;
+            container.innerHTML = slots.map(s => renderSlot(s)).join('');
+            container.querySelectorAll('.slot-generated, .slot-thinking').forEach(el => { el.scrollTop = el.scrollHeight; });
+        } catch(e) {
+            const container = document.getElementById('slots-' + m.name);
+            if (container) container.innerHTML = '<div class="muted-text" style="margin-top:0.5rem">槽位获取超时（推理中）</div>';
+        }
+    }
+
+    function renderSlot(s) {
+        if (!s.is_processing) {
+            return `<div class="slot"><span class="slot-header">#${s.id} 空闲</span></div>`;
+        }
+        const nt = Array.isArray(s.next_token) ? s.next_token[0] : (s.next_token || {});
+        const decoded = nt.n_decoded ?? '?';
+        const remain = nt.n_remain ?? '?';
+        const maxP = s.params?.n_predict;
+        const total = (decoded !== '?' && remain !== '?' && remain >= 0) ? decoded + remain : (maxP || 0);
+        const pct = total > 0 && decoded !== '?' ? ((decoded / total) * 100).toFixed(1) : 0;
+
+        let progress = `已生成 ${decoded} tokens`;
+        if (remain !== '?' && remain >= 0) progress += ` / 剩余 ${remain}`;
+        if (maxP !== undefined) progress += ` (max=${maxP})`;
+
+        const gen = s.generated ?? s.generated_text ?? s.output ?? s.content ?? '';
+        const reasoning = s.reasoning ?? s.reasoning_content ?? '';
+        let genHtml = '';
+        if (gen || reasoning) {
+            const { thinking, content } = parseThinkingAndContent(gen);
+            const showThinking = reasoning || thinking;
+            const showContent = content || (!showThinking && gen);
+            if (showThinking) genHtml += `<div class="slot-thinking"><div class="slot-thinking-title">思考</div>${escapeHtml(reasoning || thinking)}</div>`;
+            if (showContent) genHtml += `<div class="slot-generated">${escapeHtml(content || gen)}</div>`;
+            else if (showThinking) genHtml += `<div class="slot-generated muted-text">回复生成中...</div>`;
+        } else if (decoded !== '?' && decoded > 0) {
+            genHtml = `<div class="slot-progress slot-hint">需启用 slots_debug 查看生成内容</div>`;
+        } else {
+            genHtml = `<div class="slot-progress">等待生成...</div>`;
+        }
+
+        return `<div class="slot busy">
+            <div class="slot-header"><span>#${s.id} 处理中</span></div>
+            <div class="progress-bar" style="margin:0.3rem 0"><div style="width:${pct}%"></div></div>
+            <div class="slot-progress">${progress}</div>
+            ${genHtml}
+        </div>`;
+    }
+
+    // ── Ollama section ──
+
+    function renderOllamaSection() {
+        const o = modelsData.ollama;
+        const statusBadge = document.getElementById('ollamaStatus');
+        const verBadge = document.getElementById('ollamaVersion');
+        const card = document.getElementById('ollamaCard');
+
+        if (!o || o.status !== 'running') {
+            statusBadge.textContent = '离线';
+            statusBadge.className = 'badge off';
+            verBadge.textContent = '';
+            card.innerHTML = '<div class="muted-text">Ollama 服务未检测到</div>';
+            return;
+        }
+
+        statusBadge.textContent = '运行中';
+        statusBadge.className = 'badge';
+        verBadge.textContent = 'v' + (o.version || '?');
+
+        let html = '';
+
+        // Loaded models
+        if (o.loaded && o.loaded.length) {
+            html += '<div class="card-title" style="margin-top:0">已加载模型</div>';
+            for (const m of o.loaded) {
+                const vramPct = m.size_gb > 0 ? ((m.vram_gb / m.size_gb) * 100).toFixed(0) : 0;
+                let expiry = '';
+                if (m.expires_at) {
+                    const remaining = Math.max(0, (new Date(m.expires_at) - Date.now()) / 1000);
+                    if (remaining > 0) {
+                        const min = Math.floor(remaining / 60);
+                        const sec = Math.floor(remaining % 60);
+                        expiry = `${min}分${sec}秒后卸载`;
+                    } else {
+                        expiry = '即将卸载';
+                    }
+                }
+                html += `<div class="ollama-model">
+                    <div class="name">${escapeHtml(m.name)}</div>
+                    <div class="detail">
+                        模型大小: ${fmtGB(m.size_gb)} &nbsp;|&nbsp; VRAM: ${fmtGB(m.vram_gb)}
+                        ${m.quantization ? ' &nbsp;|&nbsp; ' + escapeHtml(m.quantization) : ''}
+                        ${expiry ? ' &nbsp;|&nbsp; <span style="color:var(--warn)">' + expiry + '</span>' : ''}
+                    </div>
+                    <div style="margin-top:0.3rem">
+                        <div style="display:flex;justify-content:space-between;font-size:0.65rem;color:var(--muted);margin-bottom:0.1rem">
+                            <span>VRAM 使用</span><span>${vramPct}%</span>
+                        </div>
+                        <div class="progress-bar"><div style="width:${vramPct}%;background:#f97316"></div></div>
+                    </div>
+                </div>`;
+            }
+        } else {
+            html += '<div class="muted-text">无已加载模型（按需加载）</div>';
+        }
+
+        // Available models (exclude ones already shown in llama grid)
+        const routedOllama = new Set((modelsData.models || []).filter(m => m.ollama).map(m => m.ollama_model || m.model));
+        const extraAvailable = (o.available || []).filter(m => !routedOllama.has(m.name));
+        if (extraAvailable.length) {
+            html += '<div class="card-title" style="margin-top:0.75rem">其他可用模型（未路由）</div>';
+            html += '<div class="avail-list">';
+            for (const m of extraAvailable) {
+                const loaded = o.loaded && o.loaded.some(l => l.name === m.name);
+                html += `<div class="avail-tag" ${loaded ? 'style="color:var(--accent);border:1px solid var(--accent-dim)"' : ''}>
+                    ${escapeHtml(m.name)} (${fmtGB(m.size_gb)})
+                    ${m.quantization ? ' ' + m.quantization : ''}
+                </div>`;
+            }
+            html += '</div>';
+        } else if (o.available && o.available.length) {
+            html += '<div class="muted-text" style="margin-top:0.75rem">所有可用模型均已注册到上方路由</div>';
+        }
+
+        card.innerHTML = html;
+    }
+
+    // ── Polling scheduler ──
+
+    function schedulePoll(key, fn, interval) {
+        if (timers[key]) clearTimeout(timers[key]);
+        if (document.hidden) return;
+        timers[key] = setTimeout(fn, interval);
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            Object.keys(timers).forEach(k => { clearTimeout(timers[k]); timers[k] = null; });
+        } else {
+            fetchSystem();
+            fetchModels();
+        }
+    });
+
+    // ── Init ──
+
+    fetchSystem();
+    fetchModels();
