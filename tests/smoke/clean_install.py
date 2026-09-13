@@ -137,12 +137,30 @@ print(json.dumps({'package': str(package_path), 'heavy_dependencies': 'absent'})
             run("initialize sample registry via installed CLI", [cli, "--project-root", checkout, "registry", "init"])
             run("validate sample registry via installed CLI", [cli, "--project-root", checkout, "config", "validate"])
             run("list sample models without weights", [cli, "--project-root", checkout, "list", "--json"])
-            for script in ("manage.sh", "deploy.sh", "jina.sh", "whisper.sh", "serve-ui.sh", "ds4.sh",
+            run("checkout manage.sh --help", [checkout / "manage.sh", "--help"])
+            compatibility = checkout / "scripts/compat"
+            for script in ("deploy.sh", "jina.sh", "whisper.sh", "serve-ui.sh", "ds4.sh", "monitor.sh",
                            "download.sh", "init_llamacpp.sh", "setup_llamacpp.sh"):
-                run(f"compatibility {script} --help", [checkout / script, "--help"])
-            for script in ("serve-ui.py", "serve_embedding.py", "serve_rerank.py", "serve_whisper.py",
-                           "download_model.py", "registry_cli.py", "model_inventory.py"):
+                run(f"compatibility scripts/compat/{script} --help", [compatibility / script, "--help"])
+            for script in ("serve-ui.py", "serve_embedding.py", "serve_rerank.py", "serve_whisper.py"):
                 run(f"compatibility {script} --help", [python, checkout / script, "--help"])
+            for script in ("download_model.py", "registry_cli.py", "model_inventory.py"):
+                run(f"compatibility scripts/compat/{script} --help", [python, compatibility / script, "--help"])
+            compatibility_import_check = """import json, sys
+from pathlib import Path
+checkout = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(checkout / 'scripts/compat'))
+import model_paths
+import local_llm_deploy
+assert Path(model_paths.__file__).resolve() == checkout / 'scripts/compat/model_paths.py'
+assert Path(local_llm_deploy.__file__).resolve() == checkout / 'src/local_llm_deploy/__init__.py'
+heavy = ('torch', 'mlx', 'mlx_whisper', 'transformers', 'huggingface_hub')
+assert not set(heavy).intersection(sys.modules)
+print(json.dumps({'compatibility_module': model_paths.__file__,
+                  'package': local_llm_deploy.__file__, 'heavy_dependencies': 'not imported'}))
+"""
+            run("compatibility model_paths import from checkout without heavy runtimes",
+                [python, "-I", "-c", compatibility_import_check, checkout])
             run("validate sample registry via compatibility wrapper", [checkout / "manage.sh", "config", "validate"])
             if args.run_tests:
                 run("clean source full no-model tests", [python, "-m", "unittest", "discover", "-s", checkout / "tests", "-t", checkout, "-v"])

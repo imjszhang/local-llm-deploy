@@ -15,9 +15,12 @@
 | `tests/services/` / `tests/smoke/` | 前者使用假模型验证服务契约，后者提供显式运行的真实服务、安装及升级验收 |
 | `static/` / `templates/` | 监控前端资源与模型提示模板，各自独立维护 |
 | `scripts/` / `tools/` | 维护脚本与运行辅助入口，不承载模型业务实现 |
+| `scripts/compat/` | 从根目录迁出的手动命令包装；保留参数用法，不再保留旧根路径 |
 | `docs/` / `journal/` | 项目文档与实验记录模板；临时验收产物写入已忽略的 `work_dir/` |
 
-根目录保留 `pyproject.toml`、README、统一命令 `manage.sh` / `llm.py` 和旧入口包装。已有 launchd 配置与旧 PID 身份检查引用绝对脚本路径，所以 Python 服务入口及 `scripts/start-*.sh` 继续保留原址；后续退役这些入口必须先迁移对应 job 并验证进程归属。根目录依赖文件只转发到 `requirements/`，`DEPLOY.md` 只链接到 `docs/deployment.md`。
+根目录只保留 11 个受版本控制的文件：`README.md`、`pyproject.toml`、`.gitignore`、`.cursorignore`、`manage.sh`、`llm.py`、`bootstrap.py`、`serve-ui.py`、`serve_embedding.py`、`serve_rerank.py`、`serve_whisper.py`。新增业务代码、文档、配置样例和维护脚本均放入对应子目录。
+
+13 个手动入口归入 `scripts/compat/`；4 个根依赖转发文件和 `DEPLOY.md` 已移除，分别直接使用 `requirements/` 与 `docs/deployment.md`。已有 launchd 配置与旧 PID 身份检查引用绝对脚本路径，所以四个 Python 服务入口及 `scripts/start-*.sh` 继续保留原址；后续退役这些入口必须先迁移对应 job 并验证进程归属。
 
 `models.json`、`engines.json`、密钥、权重、PID、日志、虚拟环境与引擎源码/构建是本地部署数据，不是包源码。此次归类只移动可入库模板，不迁移这些运行路径。初始化注册表优先读取 `config/examples/models.json.example`，兼容旧部署根目录的同名模板。
 
@@ -70,7 +73,7 @@
 | `engines.py` | 固定版本构建档案、验证、切换与回退 |
 | `cli.py` | 对外命令、错误呈现、应用编排 |
 
-根目录旧脚本都是启动包装，源码代码位于 `src/local_llm_deploy/`。`bootstrap.py` 让已有绝对脚本路径从任意工作目录继续运行；安装后的 `local-llm` 命令通过 `--project-root` 或 `LOCAL_LLM_ROOT` 指定部署目录。
+根目录的 Python 入口及 `scripts/compat/` 都是薄包装，业务实现位于 `src/local_llm_deploy/`。迁后的手动脚本仍可从任意工作目录调用，Python 包装复用根 `bootstrap.py` 激活本 checkout；安装后的 `local-llm` 命令通过 `--project-root` 或 `LOCAL_LLM_ROOT` 指定部署目录。
 
 ## 路由与请求生命周期
 

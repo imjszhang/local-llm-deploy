@@ -1,6 +1,6 @@
 # Jina Embedding 与 Rerank
 
-模型服务源码位于 `src/local_llm_deploy/services/`。根目录入口与 `manage.sh` 命令保留；模型、端口和解释器通过统一配置解析。
+模型服务源码位于 `src/local_llm_deploy/services/`。根目录 Python 服务入口与 `manage.sh` 命令保留，手动 `jina.sh` 已移至 `scripts/compat/`；模型、端口和解释器通过统一配置解析。
 
 ## 安装与启动
 

@@ -33,7 +33,7 @@ python3.14 -m venv .venv-whisper
 
 实际解释器可使用完整路径；已有虚拟环境不要重复创建，升级采用新目录，见 [升级指南](upgrade.md)。Whisper 的启动描述会将项目 `tools/` 放入 PATH，`tools/ffmpeg` 使用安装的 imageio-ffmpeg。
 
-也可通过 `requirements/` 中的依赖入口安装，例如 `pip install -r requirements/embedding.txt`。这些文件引用相应 extra；需要锁定版本时同时加 `-c constraints/...`。根目录 `requirements-*.txt` 保留为旧命令的转发入口。
+也可通过 `requirements/` 中的依赖入口安装，例如 `pip install -r requirements/embedding.txt`。这些文件引用相应 extra；需要锁定版本时同时加 `-c constraints/...`。根目录依赖转发文件已移除，旧路径对应关系见 [依赖入口](../requirements/README.md)。
 
 ## 模型下载与安装选择
 
@@ -53,8 +53,8 @@ python3.14 -m venv .venv-whisper
 首次下载源码需要明确 commit：
 
 ```bash
-./init_llamacpp.sh --revision <40位commit>
-./setup_llamacpp.sh
+./manage.sh engine init --revision <40位commit>
+./manage.sh engine build
 ./manage.sh engine register stable --directory "$PWD/llama.cpp" --default
 ```
 
@@ -72,10 +72,10 @@ CPP_DIR="$PWD/work_dir/llama.cpp-qwen38" ./manage.sh start qwen3.8-27b-aggressiv
 ```bash
 ./manage.sh start <模型键>
 ./manage.sh start <模型键> --port 8002 --host 127.0.0.1
-./serve-ui.sh start
+./manage.sh start serve-ui
 ./manage.sh status --probe
 ./manage.sh stop <模型键>
-./serve-ui.sh stop
+./manage.sh stop serve-ui
 ```
 
 macOS 的辅助服务与网关沿用 launchd；GGUF 默认普通后台进程。可通过 `--management process|launchd` 显式选择。端口占用会报错，不停止无关进程。不同模型的自动启动/异常恢复策略保留原设定。

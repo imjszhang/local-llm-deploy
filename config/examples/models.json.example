@@ -127,7 +127,7 @@
     "backend_model": "deepseek-v4-flash",
     "default_port": 8005,
     "external_backend": true,
-    "startup_hint": "./ds4.sh start  （launchd 常驻，端口 8005，batched-session 4；请设置 DS4_ROOT 指向本地 ds4 仓库）",
+    "startup_hint": "./manage.sh compat ds4 start  （launchd 常驻，端口 8005，batched-session 4；请设置 DS4_ROOT 指向本地 ds4 仓库）",
     "params": {
       "ctx_size": 100000,
       "n_predict": 393216,

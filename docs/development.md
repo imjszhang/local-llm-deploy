@@ -11,10 +11,10 @@ python3 -m venv .venv-dev
 .venv-dev/bin/python -m pip install 'pip>=23'
 .venv-dev/bin/python -m pip install -e '.[dev]' -c constraints/dev.txt
 .venv-dev/bin/python -m unittest discover -s tests -t . -v
-.venv-dev/bin/python -m ruff check src tests
+.venv-dev/bin/python -m ruff check src tests scripts/compat
 ```
 
-`llm.py` 与旧入口通过 `bootstrap.py` 支持源码 checkout；可安装包提供 `local-llm` 和 `python -m local_llm_deploy`。从其他目录调用安装后的命令时，显式设置 `--project-root` 或 `LOCAL_LLM_ROOT`。测试应先安装包，不依赖手动修改 `PYTHONPATH`。
+`llm.py`、根目录服务入口与 `scripts/compat/` 中的手动入口通过根 `bootstrap.py` 支持源码 checkout；可安装包提供 `local-llm` 和 `python -m local_llm_deploy`。从其他目录调用安装后的命令时，显式设置 `--project-root` 或 `LOCAL_LLM_ROOT`。测试应先安装包，不依赖手动修改 `PYTHONPATH`。
 
 模型环境的依赖安装、约束文件及引擎升级见 [upgrade.md](upgrade.md)。普通启动和下载不会隐式执行 pip 安装或升级。
 

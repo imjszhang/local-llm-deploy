@@ -1,2 +1,0 @@
-# Compatibility entry; canonical file: requirements/whisper.txt
--r requirements/whisper.txt

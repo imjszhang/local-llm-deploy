@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Compatibility entrypoint; implementation lives in the installed package."""
-from bootstrap import activate
+from _bootstrap import activate
 activate()
 from local_llm_deploy.artifacts.inventory import main
 

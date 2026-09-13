@@ -118,7 +118,7 @@ LOCAL_LLM_TEST_LAUNCHD=1 .venv-test/bin/python -m unittest discover \
 
 ## 目录整理验收（2026-09-13）
 
-配置样例归入 `config/examples/`，依赖入口归入 `requirements/`，部署正文归入 `docs/deployment.md`，测试按 `core / gateway / lifecycle / services / smoke` 分类。根目录命令、依赖转发文件和部署文档链接保留兼容。本文重放命令已更新为新测试路径；前面各轮 JSON 报告仍保留当时的源码路径和命令。
+首轮目录整理将配置样例归入 `config/examples/`，依赖入口归入 `requirements/`，部署正文归入 `docs/deployment.md`，测试按 `core / gateway / lifecycle / services / smoke` 分类。当时保留了根目录手动命令及转发文件；后续根目录精简已按下节迁移。前面各轮 JSON 报告仍保留当时的源码路径和命令。
 
 目录迁移后，Python 3.9.6 与 3.14.4 的全套测试各运行 152 项，148 项通过，4 项 launchd 测试按设计跳过。最终隔离安装的 27 项检查全部通过，其中包含相同的 152 项完整测试。Python 3.9 运行日志位于 `work_dir/refactor-validation/layout-python39.log`。独立审阅确认 Python 3.9 和 3.14 的发现结果与迁移前一致，无重复测试 ID；旧模板回退和四个依赖文件转发解析均正常。Ruff、Shell 语法与本地文档链接检查通过。
 
@@ -131,3 +131,19 @@ LOCAL_LLM_TEST_LAUNCHD=1 .venv-test/bin/python -m unittest discover \
 ```
 
 该检查从当前源码复制到临时目录，排除真实注册表、密钥、权重和虚拟环境，再构建 wheel、安装、初始化新目录中的样例、检查兼容入口并运行全套测试。此次目录整理没有移动部署数据，也没有重启常驻服务。
+
+## 根目录精简（2026-09-13）
+
+13 个手动入口迁至 `scripts/compat/`，4 个根依赖转发文件及 `DEPLOY.md` 移除；根目录受版本控制的文件由 29 个减为 11 个。九个 Shell 脚本仍保持可执行权限；Python 包装通过公共 `_bootstrap.py` 复用根源码激活逻辑。独立审阅确认被迁出的入口未被本机已安装或已加载的 LaunchAgent 引用；根服务入口及 `scripts/start-*.sh` 未修改。
+
+迁后路径的外部 cwd 检查覆盖全部九个 Shell、三个 Python 命令及 `model_paths` 导入，共 13 项通过；Shell 语法、Ruff 和本地文档链接检查通过。新的隔离安装脚本同样覆盖这些入口，并增加 `monitor.sh` 与 `model_paths` 的源码来源和轻量导入检查。
+
+```bash
+.venv-test/bin/python tests/smoke/clean_install.py \
+  --wheelhouse work_dir/refactor-wheelhouse --run-tests \
+  --report work_dir/refactor-validation/root-layout-clean-install.json
+```
+
+最终隔离安装的 29 项检查全部通过，包含 152 项完整测试（148 项通过，4 项 launchd 测试按设计跳过）。报告位于 `work_dir/refactor-validation/root-layout-clean-install.json`。
+
+真实配置、权重、运行状态与常驻服务保持原状。旧手动命令的根路径已主动移除，调用方按 [旧命令迁移](../scripts/compat/README.md) 更新路径或改用 `./manage.sh`。

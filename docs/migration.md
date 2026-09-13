@@ -1,21 +1,27 @@
 # 迁移与受控切换
 
-本轮替换内部实现，保留部署目录里的 `models.json`、模型键、alias、默认端口、权重目录、日志入口及原脚本路径。完整协议和主动行为变化见 [compatibility.md](compatibility.md)，日常开发见 [development.md](development.md)。修改磁盘代码不会使已经运行的 Python 进程自动切换到新实现；新实现从相应进程下一次启动生效。
+本轮替换内部实现，保留部署目录里的 `models.json`、模型键、alias、默认端口、权重目录、日志入口及现有服务依赖的脚本路径。手动旧命令已归入 `scripts/compat/`，见下文路径迁移说明。完整协议和主动行为变化见 [compatibility.md](compatibility.md)，日常开发见 [development.md](development.md)。修改磁盘代码不会使已经运行的 Python 进程自动切换到新实现；新实现从相应进程下一次启动生效。
 
 ## 切换前核对
 
 先检查轻量包与配置，不执行全量服务重启：
 
 ```bash
-python llm.py config validate
-python llm.py list --json
-python llm.py status --json
-python llm.py plan MODEL
+./manage.sh config validate
+./manage.sh list --json
+./manage.sh status --json
+./manage.sh plan MODEL
 ```
 
 `list/status/plan` 不会启动模型、下载权重或重写 LaunchAgent。`status --probe` 会增加只读健康请求。确认 plan 的量化、权重路径、解释器、监听地址及引擎后，才对该实例执行 stop/start。模型环境需要可以导入本项目的轻量包；依赖环境的维护安装按 [upgrade.md](upgrade.md) 操作，不在普通启动中自动安装依赖。
 
-旧入口继续有效：`manage.sh`、`deploy.sh`、`serve-ui.sh`、`jina.sh`、`whisper.sh`、`ds4.sh`、`monitor.sh` 和 `scripts/start-*.sh` 均将参数转给 Python CLI。自动化解析应使用 `list --json`、`status --json` 和 `plan`，不要依赖旧彩色表格或错误文案。拼错的参数现在明确报错，不再被静默忽略。
+日常操作统一使用 `manage.sh`。原手动入口现在位于 `scripts/compat/`，原参数用法保留；已有 `scripts/start-*.sh` 仍留在原址。自动化解析应使用 `list --json`、`status --json` 和 `plan`，不要依赖旧彩色表格或错误文案。拼错的参数现在明确报错，不再被静默忽略。
+
+## 手动命令路径迁移
+
+根目录精简将 13 个手动入口移到 `scripts/compat/`，移除了 4 个重复依赖转发文件及 `DEPLOY.md`。例如 `./jina.sh embed status` 改为 `./manage.sh compat jina embed status` 或 `./scripts/compat/jina.sh embed status`；`pip install -r requirements-embedding.txt` 改为 `pip install -r requirements/embedding.txt`；部署文档直接使用 `docs/deployment.md`。其余对应关系见 [旧命令迁移](../scripts/compat/README.md) 和 [依赖入口](../requirements/README.md)。
+
+更新自己维护的自动化中写死的手动入口路径即可。根目录 `llm.py`、`bootstrap.py`、四个 Python 服务入口及 `scripts/start-*.sh` 仍位于原址；此次目录整理无需改写既有 plist 或重启模型。
 
 ## 保存现用引擎引用
 
@@ -30,8 +36,8 @@ python llm.py plan MODEL
 需要建立可维护引用时，先核对该目录的 Git 状态与版本，再登记已有构建：
 
 ```bash
-python llm.py engine register current --directory /path/to/clean-git-checkout
-python llm.py engine verify current
+./manage.sh engine register current --directory /path/to/clean-git-checkout
+./manage.sh engine verify current
 ```
 
 登记要求目录本身是干净 Git checkout、可执行文件存在，记录源码 commit 和程序摘要；不自动清理未提交修改。随后在模型配置中设置 `"engine_profile": "current"`，或在 plan/start 使用 `--engine current`。也可以用 `engine use NAME` 切换全局默认，但模型自己的档案和显式 `CPP_DIR`/`--cpp-dir` 覆盖仍优先。不要仅凭 `engine use` 成功就认为下一次所有模型都会使用该引擎，应再次检查各模型 plan。
@@ -68,7 +74,7 @@ python llm.py engine verify current
 
 `foreground`、`fg` 和旧 `scripts/start-*.sh` 由前台 Python 管理进程传递信号与清理子进程。`nohup` 仍选择普通后台进程；macOS 默认服务保持原 launchd 方式。其他平台使用 `--management process`，调用 launchd 命令会给出明确错误。
 
-DS4 仍只在用户显式调用 `ds4.sh` 时管理；注册表中的 external/Ollama 条目不参加 `stop --all`。DS4 启动现在要求显式 `DS4_ROOT`，不再猜测某位开发者的绝对个人目录。
+DS4 仍只在用户显式调用 `./manage.sh compat ds4 ...` 时管理；注册表中的 external/Ollama 条目不参加 `stop --all`。DS4 启动现在要求显式 `DS4_ROOT`，不再猜测某位开发者的绝对个人目录。
 
 ## 实例状态和清理
 

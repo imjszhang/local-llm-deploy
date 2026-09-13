@@ -4,7 +4,9 @@
 
 ## 命令行契约
 
-根目录脚本继续可从其他工作目录调用；`bootstrap.py` 确定本 checkout，包也支持安装后通过 `local-llm` 或 `python -m local_llm_deploy` 使用。指定部署目录使用全局 `--project-root PATH`，或环境变量 `LOCAL_LLM_ROOT`。
+2026-09-13 根目录精简后，13 个手动入口迁至 `scripts/compat/`，旧根路径不再提供；保留的是参数与执行行为。根目录依赖转发文件和 `DEPLOY.md` 也已移除。完整对应关系见 [旧命令迁移](../scripts/compat/README.md) 与 [依赖入口](../requirements/README.md)。`manage.sh`、Python 服务入口和已有 `scripts/start-*.sh` 路径保持不变。
+
+根目录统一入口、服务入口及 `scripts/compat/` 中的旧手动命令均可从其他工作目录调用；`bootstrap.py` 确定本 checkout，包也支持安装后通过 `local-llm` 或 `python -m local_llm_deploy` 使用。指定部署目录使用全局 `--project-root PATH`，或环境变量 `LOCAL_LLM_ROOT`。
 
 核心支持 Python 3.9 及以上。editable 安装需要支持 PEP 660 的 pip；建议 pip >=23，本轮现有 Python 3.9 环境的维护安装使用 pip 25.3 验证。旧 pip 21 不能作为 editable 安装兼容基线；pip 升级是显式维护步骤，不在普通命令中自动执行。
 
@@ -19,8 +21,8 @@
 | `manage.sh start MODEL` | `--port P`、`--host HOST`、`--lan`、`--quant Q`、`--model-dir PATH`；新增 `--dry-run` 查看脱敏启动描述 |
 | `manage.sh stop MODEL` / `stop --all` | 停止本项目管理的实例；不接管 Ollama 或外部 HTTP 服务 |
 | `manage.sh logs MODEL` | 默认追踪日志；`--no-follow --lines N` 用于一次性读取 |
-| `deploy.sh` | 保留 `--model-name`、`--model-dir`、`--cpp-dir`、`--quant`、`--port`、`--api-key`、`--api-key-file`、`--host`、`--lan`、`--no-lan` |
-| `jina.sh` / `whisper.sh` / `serve-ui.sh` / `ds4.sh` | 保留服务管理入口，由 Python CLI 解释运行参数与生成启动描述 |
+| `scripts/compat/deploy.sh` | 保留 `--model-name`、`--model-dir`、`--cpp-dir`、`--quant`、`--port`、`--api-key`、`--api-key-file`、`--host`、`--lan`、`--no-lan` |
+| `scripts/compat/` 下的 `jina.sh` / `whisper.sh` / `serve-ui.sh` / `ds4.sh` | 保留服务管理入口，由 Python CLI 解释运行参数与生成启动描述 |
 | `serve_embedding.py` / `serve_rerank.py` / `serve_whisper.py` | 保留 `--model-name`、`--model-dir`、`--host`、`--port`；新增 `--project-root`；重型依赖仅在启动相应模型时导入 |
 | `scripts/start-*.sh` | 保留旧 LaunchAgent 引用的入口路径 |
 
@@ -48,7 +50,7 @@
 
 下载源选择变为 CLI `--source` > 已导出环境变量 > 模型配置 > ModelScope 默认值；`.hf-env` 不覆盖已经导出的环境。`--to` 现在只允许 `models/` 子目录，旧版允许越界的绝对路径不再接受。默认启动也会考虑 manifest 中登记的安装；同一模型/量化存在多个安装时要求显式选择。删除检查覆盖共享权重使用者，`--force` 不再绕过运行和共享保护。
 
-`init_llamacpp.sh` 的新构建要求 `--revision` 提供完整 commit，`setup_llamacpp.sh` 不再默认拉取并切换历史 PR。实验引擎在独立目录构建并保留旧构建，模型通过具名档案或 `CPP_DIR`/`--cpp-dir` 选择；普通启动不自动更新引擎。
+`manage.sh engine init` 的新构建要求 `--revision` 提供完整 commit，`manage.sh engine build` 不再默认拉取并切换历史 PR。实验引擎在独立目录构建并保留旧构建，模型通过具名档案或 `CPP_DIR`/`--cpp-dir` 选择；普通启动不自动更新引擎。
 
 PID 仍位于 `run/<key>.pid`，前三行格式保持：
 

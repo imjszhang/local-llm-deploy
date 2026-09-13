@@ -26,7 +26,7 @@ python3 -m venv .venv
 ./manage.sh plan <模型键>
 ./manage.sh start <模型键>
 ./manage.sh status --probe
-./serve-ui.sh start
+./manage.sh start serve-ui
 ```
 
 访问 [监控页面](http://localhost:8888/monitor.html)。如果配置了 `.api-key`，在页面中填写 API Key 后读取模型详情；Key 只保存在当前页面内存中。
@@ -86,12 +86,15 @@ templates/            模型推理提示模板
 requirements/         分环境的依赖安装入口
 constraints/          已验证的依赖版本
 tests/                core / gateway / lifecycle / services / smoke
-scripts/              维护工具和兼容启动脚本
+scripts/              维护工具及已有 launchd 启动入口
+scripts/compat/       已迁移的旧手动命令
 tools/                ffmpeg 等运行辅助入口
 docs/                 部署、开发、架构、升级与验收文档
 ```
 
-日常操作统一使用 `./manage.sh`；已安装包也提供 `local-llm`。根目录旧脚本保留为兼容入口，新增业务代码放入 `src/`。文件放置规则见 [仓库目录说明](docs/architecture.md#仓库目录)。
+日常操作统一使用 `./manage.sh`；已安装包也提供 `local-llm`。原根目录的手动脚本已移至 `scripts/compat/`，参数用法保留，旧根路径不再提供。新旧命令对照见 [旧命令迁移](scripts/compat/README.md)。新增业务代码放入 `src/`，文件放置规则见 [仓库目录说明](docs/architecture.md#仓库目录)。
+
+根目录受版本控制的文件由 29 个减少到 11 个：README、`pyproject.toml`、两份忽略规则、`manage.sh` / `llm.py` / `bootstrap.py`，以及现有服务依赖的四个 Python 启动入口。依赖安装直接使用 `requirements/`，部署说明直接使用 `docs/deployment.md`。
 
 真实配置 `models.json` / `engines.json` / `.api-key` / `.hf-env` 与 `models/`、`run/`、`logs/`、虚拟环境及引擎构建属于本地部署数据。它们继续沿用现有路径，不随源码目录整理迁移；配置模板说明见 [config/README.md](config/README.md)。
 
