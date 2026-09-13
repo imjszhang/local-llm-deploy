@@ -1,0 +1,245 @@
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: 0 2px 3px #0000000d;
+}
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.metric-card {
+  padding: 20px 20px 15px;
+  min-height: 201px;
+  overflow: hidden;
+}
+.metric-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #a0b1ba;
+}
+.metric-kicker {
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  color: #7f96a3;
+  font-weight: 600;
+}
+.metric-value {
+  font-size: 36px;
+  letter-spacing: -1px;
+  font-weight: 450;
+  line-height: 1.35;
+  margin-top: 12px;
+  color: #e6eef1;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+.metric-value > span {
+  font-size: 14px;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: #8a9ea9;
+}
+.metric-total {
+  font-size: 12px;
+  color: #819ba8;
+  margin-left: 4px;
+}
+.metric-value .unavailable-label {
+  font-size: 11px;
+  color: #798e9a;
+}
+.sparkline {
+  height: 44px;
+  width: 100%;
+  margin: 6px 0 8px;
+  overflow: visible;
+  color: var(--green);
+}
+.sparkline--blue {
+  color: var(--blue);
+}
+.sparkline-grid {
+  stroke: #25313a;
+  stroke-width: 0.7;
+  stroke-dasharray: 2 5;
+  fill: none;
+}
+.sparkline-line {
+  stroke: currentColor;
+  stroke-width: 1.6;
+  fill: none;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.sparkline-dot {
+  fill: currentColor;
+}
+.metric-footnote {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 10px;
+  color: #718795;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+.service-segments {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 8px;
+}
+.service-segments span {
+  flex: 1;
+  height: 18px;
+  border-radius: 2px;
+  background: #253139;
+  border: 1px solid #304149;
+}
+.service-segments .segment--healthy {
+  background: #579b80;
+  border-color: #72b89a;
+}
+.service-segments .segment--offline {
+  background: #393c37;
+  border-color: #5d5947;
+}
+.traffic-values {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 17px;
+  margin-bottom: 17px;
+}
+.traffic-values > div {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.traffic-values strong {
+  font-size: 32px;
+  font-weight: 450;
+  line-height: 1.35;
+}
+.traffic-values > div > span {
+  font-size: 10px;
+  color: #889da8;
+  white-space: nowrap;
+}
+.traffic-divider {
+  height: 25px;
+  width: 1px;
+  background: #2e3c45;
+}
+.load-average {
+  font-size: 10px;
+  color: #8aa0ad;
+  display: flex;
+  justify-content: space-between;
+  gap: 7px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 11px;
+  margin-bottom: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.lanes-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin: 14px 0 28px;
+}
+.lane-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #10181e;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  padding: 16px 17px 18px;
+  overflow: hidden;
+}
+.lane-symbol,
+.model-monogram {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: #1a2d29;
+  color: #8ebcac;
+  width: 31px;
+  height: 33px;
+  border: 1px solid #28453a;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+.lane-symbol--embed,
+.model-monogram--embed,
+.model-monogram--embedding {
+  background: #1a2834;
+  color: #8baacb;
+  border-color: #2d3d4b;
+}
+.lane-symbol--rerank,
+.model-monogram--rerank {
+  background: #2a2533;
+  color: #b2a0c8;
+  border-color: #3d3549;
+}
+.lane-symbol--asr,
+.model-monogram--asr {
+  background: #302a20;
+  color: #c5b491;
+  border-color: #433c2d;
+}
+.lane-title h2 {
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.lane-title > span {
+  font-size: 10px;
+  color: #7d96a4;
+  letter-spacing: 1.2px;
+  display: block;
+  margin-top: 4px;
+}
+.lane-counts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  color: #76909e;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.lane-counts strong {
+  font-size: 12px;
+  font-weight: 500;
+  color: #afbec7;
+  margin-right: 4px;
+}
+.lane-capacity {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #1e2d34;
+}
+.lane-capacity > span {
+  display: block;
+  height: 100%;
+  background: #5b9e85;
+  transition: width 0.2s;
+}

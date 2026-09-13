@@ -8,7 +8,7 @@ import threading
 import time
 from local_llm_deploy.observability import log
 
-def collect_system_info(running):
+def collect_system_info(running, *, strict=False):
     """Collect CPU, memory, load average and per-process stats via macOS commands."""
     result = {
         "cpu": {"user": 0, "sys": 0, "idle": 100},
@@ -18,11 +18,19 @@ def collect_system_info(running):
         "cached_at": time.time(),
     }
 
+    if strict:
+        result['cpu'] = dict.fromkeys(('user', 'sys', 'idle'))
+        result['memory'] = dict.fromkeys(('total_gb', 'used_gb', 'free_gb', 'wired_gb'))
+        result['load_avg'] = [None, None, None]
+
     try:
-        top_out = subprocess.run(
+        top_result = subprocess.run(
             ["top", "-l", "1", "-n", "0", "-s", "0"],
-            capture_output=True, text=True, timeout=10,
-        ).stdout
+            capture_output=True, text=True, timeout=3 if strict else 10,
+        )
+        if strict and top_result.returncode:
+            raise ValueError('System collector failed')
+        top_out = top_result.stdout
         cpu_m = re.search(
             r"CPU usage:\s*([\d.]+)%\s*user,\s*([\d.]+)%\s*sys,\s*([\d.]+)%\s*idle",
             top_out,
@@ -65,7 +73,14 @@ def collect_system_info(running):
                     {"T": 1024, "G": 1, "M": 1/1024, "K": 1/(1024*1024)}.get(unit, 1) * float(wm.group(1)), 1
                 )
     except Exception as e:
+        if strict:
+            raise ValueError('System readings are unavailable') from None
         log.debug(f"[system] top parse error: {e}")
+
+    if strict:
+        if result['cpu']['user'] is None or result['memory']['total_gb'] is None:
+            raise ValueError('System readings are unavailable')
+        return result
 
     running_pids = {info["pid"]: name for name, info in running.items()}
     running_ports = {name: info["port"] for name, info in running.items()}

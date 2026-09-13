@@ -1,0 +1,38 @@
+{
+  "name": "local-llm-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174 --strictPort",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "vite build && node scripts/export-static.mjs",
+    "build:check": "vite build && node scripts/export-static.mjs --check",
+    "preview": "vite preview --host 127.0.0.1 --port 4174 --strictPort",
+    "test:e2e": "playwright test",
+    "bundle": "vite build",
+    "lint": "eslint src tests --max-warnings 0"
+  },
+  "dependencies": {
+    "vue": "3.5.42"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@vitejs/plugin-vue": "6.0.8",
+    "@vue/test-utils": "2.5.0",
+    "jsdom": "30.0.1",
+    "typescript": "6.0.3",
+    "vite": "8.3.0",
+    "vitest": "5.0.0",
+    "vue-tsc": "3.3.11",
+    "eslint": "10.10.0",
+    "eslint-plugin-vue": "10.11.0",
+    "typescript-eslint": "8.70.0",
+    "@eslint/js": "10.0.1"
+  }
+}

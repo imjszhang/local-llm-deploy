@@ -2,6 +2,8 @@
 
 本项目是轻量 Python 控制层加独立模型进程。CLI 和网关不导入 PyTorch、MLX 或模型权重；Embedding、Rerank、Whisper 保留自己的运行环境。接口保留与主动变化见 [compatibility.md](compatibility.md)，上线切换见 [migration.md](migration.md)。
 
+模型监控页的开发、固定数据预览和构建命令见 [frontend/README.md](../frontend/README.md)，实施边界及发布验收见 [monitor-ui-plan.md](monitor-ui-plan.md)。前端工具与配置统一放在 `frontend/`，生产部署仍使用 Python 网关。
+
 ## 本地开发环境
 
 支持 Python 3.9 及以上。只维护 CLI、网关、配置或生命周期时，无需安装模型依赖：

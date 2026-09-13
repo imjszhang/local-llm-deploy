@@ -13,7 +13,8 @@
 | `tests/gateway/` | 网关发现、路由、调度、转发及断开行为测试 |
 | `tests/lifecycle/` | CLI、进程与显式启用的 launchd 测试 |
 | `tests/services/` / `tests/smoke/` | 前者使用假模型验证服务契约，后者提供显式运行的真实服务、安装及升级验收 |
-| `static/` / `templates/` | 监控前端资源与模型提示模板，各自独立维护 |
+| `frontend/` | Vue 监控源码、DTO、数据状态、组件、全部前端配置与测试 |
+| `static/` / `templates/` | 已构建监控产物与模型提示模板；前者通过前端构建更新，不手工改 hash 资源 |
 | `scripts/` / `tools/` | 维护脚本与运行辅助入口，不承载模型业务实现 |
 | `scripts/compat/` | 从根目录迁出的手动命令包装；保留参数用法，不再保留旧根路径 |
 | `docs/` / `journal/` | 项目文档与实验记录模板；临时验收产物写入已忽略的 `work_dir/` |
@@ -69,11 +70,14 @@
 | `gateway/transport.py` | HTTP、SSE、保活、有界缓冲、断开与不确定状态 |
 | `gateway/auth.py` / `knowledge.py` | 模型 Key 策略与独立知识库凭据转发 |
 | `gateway/monitoring.py` / `observability.py` | 资源观测、状态字段、请求 ID、有限日志采集 |
+| `gateway/monitor_api.py` | 认证只读 DTO、有界采集缓存、来源状态及后端监控差异 |
 | `services/` | 共享 HTTP 边界及三种独立模型适配器 |
 | `engines.py` | 固定版本构建档案、验证、切换与回退 |
 | `cli.py` | 对外命令、错误呈现、应用编排 |
 
 根目录的 Python 入口及 `scripts/compat/` 都是薄包装，业务实现位于 `src/local_llm_deploy/`。迁后的手动脚本仍可从任意工作目录调用，Python 包装复用根 `bootstrap.py` 激活本 checkout；安装后的 `local-llm` 命令通过 `--project-root` 或 `LOCAL_LLM_ROOT` 指定部署目录。
+
+控制台通过 `/monitor-api/v1/` 获取展示数据。有限后台采集器共享缓存；请求处理只读取已发布快照，耗时探测不持有快照锁。发现热缓存立即可读，首次发现的路由请求可有界等待；配置代次防止旧采集覆盖新配置。监控不启动推理、不操作生命周期，也不持有另一套调度状态。详细协议与状态语义见 [监控计划](monitor-ui-plan.md)。
 
 ## 路由与请求生命周期
 

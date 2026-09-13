@@ -17,3 +17,30 @@ jobs:
       - run: python -m ruff check src tests scripts/compat scripts/snapshot-dependencies.py bootstrap.py llm.py
       - run: python -m unittest discover -s tests -t . -v
       - run: python -m compileall -q src
+  monitor:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.node-version
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build:check
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: monitor-browser-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7

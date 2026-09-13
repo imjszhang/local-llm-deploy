@@ -162,6 +162,24 @@ print(json.dumps({'compatibility_module': model_paths.__file__,
             run("compatibility model_paths import from checkout without heavy runtimes",
                 [python, "-I", "-c", compatibility_import_check, checkout])
             run("validate sample registry via compatibility wrapper", [checkout / "manage.sh", "config", "validate"])
+            static_check = """import json, os, shutil, sys, unittest
+from pathlib import Path
+import local_llm_deploy
+package_path = Path(local_llm_deploy.__file__).resolve()
+assert Path(sys.prefix).resolve() in package_path.parents, 'Expected installed wheel'
+assert shutil.which('node') is None and shutil.which('npm') is None, 'Frontend runtime unexpectedly available'
+checkout = Path(sys.argv[1]).resolve()
+os.environ.pop('LOCAL_LLM_TEST_STATIC_DIR', None)
+sys.path.insert(0, str(checkout))
+from tests.gateway.test_monitor_static import MonitorStaticTests
+suite = unittest.defaultTestLoader.loadTestsFromTestCase(MonitorStaticTests)
+result = unittest.TextTestRunner(verbosity=2).run(suite)
+assert result.testsRun == 4 and result.wasSuccessful(), 'Installed wheel static HTTP validation failed'
+assert Path(local_llm_deploy.__file__).resolve() == package_path, 'Source package shadowed installed wheel'
+print(json.dumps({'package_origin': 'installed_wheel', 'node': 'absent', 'npm': 'absent', 'static_http_checks': result.testsRun}))
+"""
+            run("installed wheel serves copied static without Node", [python, "-I", "-c", static_check, checkout],
+                runtime_env=dict(env, PATH=str(isolated_env / "bin")))
             if args.run_tests:
                 run("clean source full no-model tests", [python, "-m", "unittest", "discover", "-s", checkout / "tests", "-t", checkout, "-v"])
             if args.launchd_tests:

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "entry": "monitor.html",
+  "files": [
+    {
+      "path": "monitor-assets/monitor-CyXDWV1b.js",
+      "sha256": "0a218caf1eabc8a6a545e285df83203ea04175e01626779b8b8c58afd6255a98",
+      "bytes": 119875,
+      "gzip_bytes": 43516
+    },
+    {
+      "path": "monitor-assets/monitor-DGz9mL6m.css",
+      "sha256": "a776205d7a8397c84d1ff60532d83e6f7c6945c0fc537e402e569d8bc0877d01",
+      "bytes": 35356,
+      "gzip_bytes": 8186
+    },
+    {
+      "path": "monitor-assets/monitor-icon-DHaTF3UT.svg",
+      "sha256": "fa0b7ad4e0fb50cda1b7e6f8c7c777a94961bb0ec22a051008d36c8aa754270c",
+      "bytes": 202,
+      "gzip_bytes": 167
+    },
+    {
+      "path": "monitor.html",
+      "sha256": "baae9fc19094f1d0792e1528441e51eae29f26e3a320a1870c810ec8f2735b78",
+      "bytes": 723,
+      "gzip_bytes": 458
+    }
+  ],
+  "gzip": {
+    "javascript": 43516,
+    "css": 8186
+  }
+}

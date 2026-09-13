@@ -29,7 +29,7 @@ python3 -m venv .venv
 ./manage.sh start serve-ui
 ```
 
-访问 [监控页面](http://localhost:8888/monitor.html)。如果配置了 `.api-key`，在页面中填写 API Key 后读取模型详情；Key 只保存在当前页面内存中。
+访问 [监控页面](http://localhost:8888/monitor.html)，查看系统趋势、全部模型、通道活动和后端详情。如果配置了 `.api-key`，通过“访问设置”输入后读取完整状态；Key 只保存在当前页面内存中。页面为只读控制台，启动无需 Node。前端开发和构建见 [frontend/README.md](frontend/README.md)。
 
 ## 日常管理
 
@@ -81,7 +81,8 @@ llama.cpp 的源码与模型权重分开管理。新构建采用明确 commit，
 ```text
 src/local_llm_deploy/  核心实现：CLI、模型管理、网关、服务
 config/examples/      可入库的配置模板
-static/               监控页面及前端资源
+frontend/             监控前端源码、构建配置与浏览器测试
+static/               已构建的监控页面及前端资源
 templates/            模型推理提示模板
 requirements/         分环境的依赖安装入口
 constraints/          已验证的依赖版本
@@ -109,3 +110,4 @@ docs/                 部署、开发、架构、升级与验收文档
 - [升级与回退](docs/upgrade.md)
 - [验证记录](docs/validation.md)
 - [重构计划](docs/refactoring-plan.md)
+- [监控控制台实施与验收](docs/monitor-ui-plan.md)
