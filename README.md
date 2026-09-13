@@ -17,7 +17,7 @@ python3 -m venv .venv
 
 已有 `models.json` 时跳过 `registry init`；重构不要求迁移已有权重或重写注册表。
 
-模型下载需要下载依赖，推理依赖按需安装，见 [部署指南](DEPLOY.md)。
+模型下载需要下载依赖，推理依赖按需安装，见 [部署指南](docs/deployment.md)。
 
 ```bash
 .venv/bin/python -m pip install -e '.[download]'
@@ -76,10 +76,29 @@ llama.cpp 的源码与模型权重分开管理。新构建采用明确 commit，
 
 模型可设置 `engine_profile` 绑定特定构建，`CPP_DIR` / `--cpp-dir` 仍可覆盖。详见 [升级指南](docs/upgrade.md)。
 
+## 目录导航
+
+```text
+src/local_llm_deploy/  核心实现：CLI、模型管理、网关、服务
+config/examples/      可入库的配置模板
+static/               监控页面及前端资源
+templates/            模型推理提示模板
+requirements/         分环境的依赖安装入口
+constraints/          已验证的依赖版本
+tests/                core / gateway / lifecycle / services / smoke
+scripts/              维护工具和兼容启动脚本
+tools/                ffmpeg 等运行辅助入口
+docs/                 部署、开发、架构、升级与验收文档
+```
+
+日常操作统一使用 `./manage.sh`；已安装包也提供 `local-llm`。根目录旧脚本保留为兼容入口，新增业务代码放入 `src/`。文件放置规则见 [仓库目录说明](docs/architecture.md#仓库目录)。
+
+真实配置 `models.json` / `engines.json` / `.api-key` / `.hf-env` 与 `models/`、`run/`、`logs/`、虚拟环境及引擎构建属于本地部署数据。它们继续沿用现有路径，不随源码目录整理迁移；配置模板说明见 [config/README.md](config/README.md)。
+
 ## 文档
 
 - [架构与模块职责](docs/architecture.md)
-- [部署与环境安装](DEPLOY.md)
+- [部署与环境安装](docs/deployment.md)
 - [API 与认证](docs/api-guide.md)
 - [开发和测试](docs/development.md)
 - [迁移说明](docs/migration.md)

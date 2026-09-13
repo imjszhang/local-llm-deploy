@@ -103,7 +103,7 @@ def main(argv=None):
                 with wave.open(str(audio), "wb") as output:
                     output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
                     output.writeframes(b"\x00\x00" * 32000)
-            loader = importlib.util.spec_from_file_location("live_smoke", source.root / "tests/test_services_smoke.py")
+            loader = importlib.util.spec_from_file_location("live_smoke", source.root / "tests/smoke/services.py")
             runner = importlib.util.module_from_spec(loader)
             loader.loader.exec_module(runner)
             output = io.StringIO()

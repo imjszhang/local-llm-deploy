@@ -1,3 +1,2 @@
-# Apple Silicon Rerank environment.
-# Run from the project root; install explicitly during maintenance.
--e .[rerank]
+# Compatibility entry; canonical file: requirements/rerank.txt
+-r requirements/rerank.txt

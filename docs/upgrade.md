@@ -66,7 +66,7 @@ python3.14 -m venv .venv-rerank-next
 
 ## 切换前后的验证
 
-- 核心：`python -m unittest discover -s tests -v`。
+- 核心：`python -m unittest discover -s tests -t . -v`。
 - 生命周期：干净临时实例 start → ready → stop → restart，macOS 另测 launchd。
 - 真实模型：Chat 普通/流式；Embedding task/维度；Rerank 返回字段；Whisper 三种格式。
 - 监控：认证、模型详情、队列状态；知识库凭据独立。

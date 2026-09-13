@@ -1,6 +1,6 @@
 # API Key 示例
 # 复制此文件为 .api-key 并填入你的密钥：
-#   cp .api-key.example .api-key
+#   cp config/examples/api-key.example .api-key
 # 然后编辑 .api-key，将下面的占位符替换为实际 key
 #
 # .api-key 已被 .gitignore 忽略，不会被提交到 Git

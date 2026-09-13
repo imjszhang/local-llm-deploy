@@ -22,7 +22,7 @@ def main(argv=None):
     parser.add_argument("--rerank-model", default="jina-reranker-v3")
     parser.add_argument("--whisper-model", default="whisper-large-v3")
     parser.add_argument("--no-auth", action="store_true")
-    parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args(argv)
     if args.whisper and not args.audio:
         parser.error("--whisper requires --audio pointing to a short local sample")

@@ -55,7 +55,7 @@
 
 把进程存活、端口可连接和服务就绪区分开。状态查询只读取；失效记录清理由生命周期操作或显式 reconcile 命令处理。
 
-实施时统一为 `lifecycle.types.InstanceObservation`，启动描述为 `ServiceSpec`；没有另建一份重复的 `domain.ServiceInstance`。测试按职责保存在 `tests/test_*.py`，显式本机验收位于 `tests/smoke/`，不提前建立空测试目录。
+实施时统一为 `lifecycle.types.InstanceObservation`，启动描述为 `ServiceSpec`；没有另建一份重复的 `domain.ServiceInstance`。测试按职责归入 `tests/core/`、`tests/gateway/`、`tests/lifecycle/` 和 `tests/services/`；显式本机验收位于 `tests/smoke/`。
 
 迁移初期继续读取已有 PID 文件并生成统一的内存状态。不要在第一阶段引入另一份同等权威的状态文件。将来确需新文件格式时，增加版本、原子写入和旧格式读适配，并明确唯一写入者。
 
@@ -65,7 +65,7 @@
 src/local_llm_deploy/
   cli.py                    # 命令解析、输出与应用编排
   config.py                 # 注册表、环境配置、校验、兼容转换
-  domain.py                 # ModelSpec / ModelInstallation / ServiceInstance
+  domain.py                 # ModelSpec / ModelInstallation；实例观察位于 lifecycle/types.py
   registry.py               # 注册表读写与配置缓存
   artifacts/                # 下载、权重路径、安装清单、删除规则
   lifecycle/                # 服务启动/停止/状态、进程身份与就绪检查
@@ -87,11 +87,15 @@ src/local_llm_deploy/
     rerank.py               # Rerank 服务与模型适配
     whisper.py              # Whisper 服务与模型适配
   observability.py           # 日志上下文、请求 ID、耗时和脱敏
-static/                     # 保留页面；按需抽取 JS/CSS
+config/examples/            # 可入库配置模板
+static/                     # 监控页面、JS/CSS
+templates/                  # 推理提示模板
+requirements/               # 按环境分组的安装入口
 tests/
-  unit/
-  contract/
-  integration/
+  core/                     # 配置、注册表、权重、引擎
+  gateway/                  # 发现、路由、调度、转发契约
+  lifecycle/                # CLI、进程与 launchd
+  services/                 # 模型服务契约
   smoke/                    # 显式启用的本机真实模型测试
 pyproject.toml
 constraints/                # 按运行环境保存已验证的依赖解析结果
@@ -103,7 +107,7 @@ docs/
   migration.md
 ```
 
-目录按实现进度建立，不提前创建空抽象。
+上述目录已随实现建立；仓库文件放置规则见 [architecture.md](architecture.md#仓库目录)。
 
 依赖方向：CLI / 网关 / 模型服务调用配置与领域模块；网关使用发现、路由、调度、转发；生命周期使用后端生成的启动描述。领域模块不依赖 HTTP 或 Shell。重型模型库仅存在于对应服务的运行路径。
 

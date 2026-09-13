@@ -15,5 +15,5 @@ jobs:
       - run: python -m pip install -e '.[dev]' -c constraints/dev.txt
       - run: python -m pip check
       - run: python -m ruff check src tests scripts/snapshot-dependencies.py bootstrap.py llm.py
-      - run: python -m unittest discover -s tests -v
+      - run: python -m unittest discover -s tests -t . -v
       - run: python -m compileall -q src

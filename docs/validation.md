@@ -19,8 +19,8 @@
 复跑入口：
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v
-.venv-test/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m unittest discover -s tests -t . -v
+.venv-test/bin/python -m unittest discover -s tests -t . -v
 .venv-test/bin/python -m ruff check src tests
 ```
 
@@ -32,7 +32,7 @@
 
 ```bash
 LOCAL_LLM_TEST_BASELINE_COMMIT=ecfe929c68ffc7b3b4f9d0e02dfaa2573f573e03 \
-  .venv-test/bin/python -m unittest discover -s tests -p test_gateway_contract.py -v
+  .venv-test/bin/python -m unittest discover -s tests/gateway -t . -p test_gateway_contract.py -v
 ```
 
 ## 干净源码与依赖环境
@@ -45,7 +45,7 @@ LOCAL_LLM_TEST_BASELINE_COMMIT=ecfe929c68ffc7b3b4f9d0e02dfaa2573f573e03 \
   --report work_dir/refactor-clean-install.json --run-tests
 ```
 
-该轮安装/命令检查及完整无模型测试通过。报告记录精确 argv、cwd、源码 SHA256、wheel SHA256 和测试输出。该脚本要求本地 wheelhouse；正常联网安装流程见 [DEPLOY.md](../DEPLOY.md)。
+该轮安装/命令检查及完整无模型测试通过。报告记录精确 argv、cwd、源码 SHA256、wheel SHA256 和测试输出。该脚本要求本地 wheelhouse；正常联网安装流程见 [部署指南](deployment.md)。
 
 最终还通过 `--run-tests --launchd-tests` 对已安装 wheel 的模块入口完成相同 148 项常规测试与 4 项真实 launchd 测试，详见本机 `work_dir/refactor-clean-launchd-install.json`。首次安装模式验收暴露端口预检误判 TIME_WAIT、导致 KeepAlive 延迟重启；现已加入确定性回归并修正预检，继续拒绝活跃监听器。修复后 4 项平台测试共 13.153 秒全部通过。
 
@@ -107,7 +107,7 @@ LOCAL_LLM_TEST_BASELINE_COMMIT=ecfe929c68ffc7b3b4f9d0e02dfaa2573f573e03 \
 
 ```bash
 LOCAL_LLM_TEST_LAUNCHD=1 .venv-test/bin/python -m unittest discover \
-  -s tests -p test_launchd_smoke.py -v
+  -s tests/lifecycle -t . -p test_launchd_smoke.py -v
 ```
 
 知识库通过假后端验证路径、Authorization、多 Cookie 和 HTTP 行为，未使用真实知识库账号。当前系统的 Ollama 只读发现正常；没有升级 Ollama/DS4。生产长请求、负载压测和实际用户登录后的系统恢复仍按迁移手册单独验收。
@@ -115,3 +115,19 @@ LOCAL_LLM_TEST_LAUNCHD=1 .venv-test/bin/python -m unittest discover \
 后端计算是否停止不能仅通过客户端断开推断。无法确认的请求保留预算并显示 uncertain，恢复顺序是确认/停止后端再恢复网关。调度状态只属于一个网关进程，异常进程退出后的状态恢复不是本轮引入的跨进程协调能力。
 
 本机原服务最终检查均就绪：Embedding 15895、Rerank 15965、Whisper 2127、Qwen 23358、网关 2100；Ollama 外部模型可发现。这里只记录核对时状态，不把这些 PID 当作将来可直接发送信号的授权依据。
+
+## 目录整理验收（2026-09-13）
+
+配置样例归入 `config/examples/`，依赖入口归入 `requirements/`，部署正文归入 `docs/deployment.md`，测试按 `core / gateway / lifecycle / services / smoke` 分类。根目录命令、依赖转发文件和部署文档链接保留兼容。本文重放命令已更新为新测试路径；前面各轮 JSON 报告仍保留当时的源码路径和命令。
+
+目录迁移后，Python 3.9.6 与 3.14.4 的全套测试各运行 152 项，148 项通过，4 项 launchd 测试按设计跳过。最终隔离安装的 27 项检查全部通过，其中包含相同的 152 项完整测试。Python 3.9 运行日志位于 `work_dir/refactor-validation/layout-python39.log`。独立审阅确认 Python 3.9 和 3.14 的发现结果与迁移前一致，无重复测试 ID；旧模板回退和四个依赖文件转发解析均正常。Ruff、Shell 语法与本地文档链接检查通过。
+
+目录整理后的完整隔离安装可重放：
+
+```bash
+.venv-test/bin/python tests/smoke/clean_install.py \
+  --wheelhouse work_dir/refactor-wheelhouse --run-tests \
+  --report work_dir/refactor-validation/layout-clean-install.json
+```
+
+该检查从当前源码复制到临时目录，排除真实注册表、密钥、权重和虚拟环境，再构建 wheel、安装、初始化新目录中的样例、检查兼容入口并运行全套测试。此次目录整理没有移动部署数据，也没有重启常驻服务。

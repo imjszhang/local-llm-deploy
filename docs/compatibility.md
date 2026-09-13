@@ -121,10 +121,10 @@ Whisper 以二进制解析 multipart，音频写入临时文件后调用模型�
 无模型测试：
 
 ```bash
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -t . -v
 ```
 
-该命令要求先安装轻量包，测试不会读取真实 `.api-key`、下载模型或操作常驻服务。服务封装契约位于 `tests/test_services_contract.py`；网关使用独立假后端测试。
+该命令要求先安装轻量包，测试不会读取真实 `.api-key`、下载模型或操作常驻服务。服务封装契约位于 `tests/services/test_services_contract.py`；网关使用独立假后端测试。
 
 真实冒烟只由明确执行的脚本触发，按顺序发送小样本：
 

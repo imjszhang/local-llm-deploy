@@ -456,7 +456,7 @@ class FFmpegLauncherTests(unittest.TestCase):
             executable.write_text(f"#!{sys.executable}\nimport json, os, sys\nprint(json.dumps({{'argv': sys.argv[1:], 'pid': os.getpid()}}))\nraise SystemExit(7)\n")
             executable.chmod(0o755)
             (root / "imageio_ffmpeg.py").write_text(f"def get_ffmpeg_exe():\n    return {str(executable)!r}\n")
-            launcher = Path(__file__).resolve().parents[1] / "tools/ffmpeg"
+            launcher = Path(__file__).resolve().parents[2] / "tools/ffmpeg"
             env = {**os.environ, "LOCAL_LLM_FFMPEG_PYTHON": sys.executable, "PYTHONPATH": directory}
             arguments = ["-i", "file with spaces.wav", "-metadata", "title=你好", "-"]
             with subprocess.Popen([str(launcher), *arguments], cwd=directory, env=env,
@@ -468,7 +468,7 @@ class FFmpegLauncherTests(unittest.TestCase):
     def test_launcher_rejects_recursive_executable_override(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            launcher = Path(__file__).resolve().parents[1] / "tools/ffmpeg"
+            launcher = Path(__file__).resolve().parents[2] / "tools/ffmpeg"
             (root / "imageio_ffmpeg.py").write_text(f"def get_ffmpeg_exe():\n    return {str(launcher)!r}\n")
             env = {**os.environ, "LOCAL_LLM_FFMPEG_PYTHON": sys.executable, "PYTHONPATH": directory}
             result = subprocess.run([str(launcher), "-version"], env=env, capture_output=True, text=True, timeout=5)
@@ -491,7 +491,7 @@ class FFmpegLauncherTests(unittest.TestCase):
 
 class ServiceSmokeRunnerTests(unittest.TestCase):
     def test_live_runner_checks_all_protocols_without_exposing_key(self):
-        from test_services_smoke import main as smoke_main
+        from tests.smoke.services import main as smoke_main
         from local_llm_deploy.services.common import parse_multipart_form
 
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
@@ -540,7 +540,7 @@ class ServiceSmokeRunnerTests(unittest.TestCase):
             self.assertNotIn("never-print-this-key", output.getvalue())
 
     def test_live_runner_returns_failure_for_bad_response_contract(self):
-        from test_services_smoke import main as smoke_main
+        from tests.smoke.services import main as smoke_main
 
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
             with patch("urllib.request.urlopen", side_effect=lambda *args, **kwargs: io.BytesIO(b"{}")):

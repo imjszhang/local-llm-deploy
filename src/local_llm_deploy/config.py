@@ -48,12 +48,17 @@ class ProjectPaths:
     def static(self):
         return self.root / "static"
 
+    @property
+    def model_template(self):
+        template = self.root / "config" / "examples" / "models.json.example"
+        return template if template.is_file() else self.root / "models.json.example"
+
 
 def project_paths(root: str | Path | None = None) -> ProjectPaths:
     selected = root or os.environ.get("LOCAL_LLM_ROOT")
     if selected is None:
         source_root = Path(__file__).resolve().parents[2]
-        if not (source_root / "models.json.example").is_file():
+        if not ProjectPaths(source_root).model_template.is_file():
             raise ConfigError("请设置 LOCAL_LLM_ROOT 或 --project-root 指向部署目录")
         selected = source_root
     return ProjectPaths(Path(selected))

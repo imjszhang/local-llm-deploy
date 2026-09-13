@@ -1,6 +1,6 @@
 """Opt-in macOS LaunchAgent test; owns only a UUID label and a temporary fake server.
 
-Run: LOCAL_LLM_TEST_LAUNCHD=1 python -m unittest discover -s tests -p test_launchd_smoke.py -v
+Run: LOCAL_LLM_TEST_LAUNCHD=1 python -m unittest discover -s tests/lifecycle -t . -p test_launchd_smoke.py -v
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from local_llm_deploy.lifecycle import launchd
 from local_llm_deploy.lifecycle.manager import start_service, stop_service
 from local_llm_deploy.lifecycle.observe import health_ready, launchd_pid, observe_instances, read_pid
 from local_llm_deploy.lifecycle.types import ServiceSpec
-from test_lifecycle import FAKE_SERVER, free_port
+from tests.lifecycle.test_lifecycle import FAKE_SERVER, free_port
 
 
 @unittest.skipUnless(sys.platform == "darwin" and os.environ.get("LOCAL_LLM_TEST_LAUNCHD") == "1",

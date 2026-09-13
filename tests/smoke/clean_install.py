@@ -145,10 +145,10 @@ print(json.dumps({'package': str(package_path), 'heavy_dependencies': 'absent'})
                 run(f"compatibility {script} --help", [python, checkout / script, "--help"])
             run("validate sample registry via compatibility wrapper", [checkout / "manage.sh", "config", "validate"])
             if args.run_tests:
-                run("clean source full no-model tests", [python, "-m", "unittest", "discover", "-s", checkout / "tests", "-v"])
+                run("clean source full no-model tests", [python, "-m", "unittest", "discover", "-s", checkout / "tests", "-t", checkout, "-v"])
             if args.launchd_tests:
                 run("installed wheel isolated launchd tests", [python, "-m", "unittest", "discover", "-s",
-                                                              checkout / "tests", "-p", "test_launchd_smoke.py", "-v"],
+                                                              checkout / "tests/lifecycle", "-t", checkout, "-p", "test_launchd_smoke.py", "-v"],
                     runtime_env=dict(env, LOCAL_LLM_TEST_LAUNCHD="1"))
             result["status"] = "passed"
     except Exception as exc:

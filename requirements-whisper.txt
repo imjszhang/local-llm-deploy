@@ -1,3 +1,2 @@
-# Apple Silicon Whisper environment.
-# Run from the project root; install explicitly during maintenance.
--e .[whisper]
+# Compatibility entry; canonical file: requirements/whisper.txt
+-r requirements/whisper.txt

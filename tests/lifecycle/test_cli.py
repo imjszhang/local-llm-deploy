@@ -162,7 +162,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
 
     def test_real_wrapper_is_independent_of_working_directory(self):
-        root = Path(__file__).resolve().parents[1]
+        root = Path(__file__).resolve().parents[2]
         result = subprocess.run([str(root / "manage.sh"), "help"], cwd=self.paths.root,
                                 capture_output=True, text=True, timeout=10,
                                 env={**os.environ, "LOCAL_LLM_PYTHON": sys.executable})

@@ -4,7 +4,7 @@
 
 ## 安装与启动
 
-依赖安装和锁定版本见 [DEPLOY.md](../DEPLOY.md)。Embedding 使用 `.venv-embed`，Rerank 使用 `.venv-rerank`；可通过模型 `runtime.python` 指定其他环境。
+依赖安装和锁定版本见 [部署指南](deployment.md)。Embedding 使用 `.venv-embed`，Rerank 使用 `.venv-rerank`；可通过模型 `runtime.python` 指定其他环境。
 
 ```bash
 ./manage.sh download jina-embed

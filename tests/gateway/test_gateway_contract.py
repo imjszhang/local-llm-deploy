@@ -90,7 +90,7 @@ class GatewayContractTests(unittest.TestCase):
         """Opt-in comparison of identical contracts against this repo's old source."""
         if not re.fullmatch(r'[0-9a-f]{40}', revision):
             raise ValueError('LOCAL_LLM_TEST_BASELINE_COMMIT must be a full commit')
-        repository = Path(__file__).resolve().parents[1]
+        repository = Path(__file__).resolve().parents[2]
         source = subprocess.check_output(['git', '-C', str(repository), 'show', revision + ':serve-ui.py'])
         filename = self.root / 'baseline_gateway.py'
         filename.write_bytes(source)

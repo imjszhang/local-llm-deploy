@@ -1,3 +1,2 @@
-# PyTorch / Transformers Embedding environment.
-# Run from the project root; install explicitly during maintenance.
--e .[embedding]
+# Compatibility entry; canonical file: requirements/embedding.txt
+-r requirements/embedding.txt

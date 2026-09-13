@@ -2,6 +2,25 @@
 
 更新：2026-09-13。
 
+## 仓库目录
+
+| 路径 | 内容与维护规则 |
+| --- | --- |
+| `src/local_llm_deploy/` | 唯一的业务实现位置，按下文模块边界组织 |
+| `config/examples/` | 模型、引擎及凭据的可入库样例；真实配置仍在部署根目录 |
+| `requirements/` / `constraints/` | 前者引用 `pyproject.toml` 的 extra，后者记录已验证版本，避免多处声明依赖 |
+| `tests/core/` | 配置、注册表、权重安装与引擎测试 |
+| `tests/gateway/` | 网关发现、路由、调度、转发及断开行为测试 |
+| `tests/lifecycle/` | CLI、进程与显式启用的 launchd 测试 |
+| `tests/services/` / `tests/smoke/` | 前者使用假模型验证服务契约，后者提供显式运行的真实服务、安装及升级验收 |
+| `static/` / `templates/` | 监控前端资源与模型提示模板，各自独立维护 |
+| `scripts/` / `tools/` | 维护脚本与运行辅助入口，不承载模型业务实现 |
+| `docs/` / `journal/` | 项目文档与实验记录模板；临时验收产物写入已忽略的 `work_dir/` |
+
+根目录保留 `pyproject.toml`、README、统一命令 `manage.sh` / `llm.py` 和旧入口包装。已有 launchd 配置与旧 PID 身份检查引用绝对脚本路径，所以 Python 服务入口及 `scripts/start-*.sh` 继续保留原址；后续退役这些入口必须先迁移对应 job 并验证进程归属。根目录依赖文件只转发到 `requirements/`，`DEPLOY.md` 只链接到 `docs/deployment.md`。
+
+`models.json`、`engines.json`、密钥、权重、PID、日志、虚拟环境与引擎源码/构建是本地部署数据，不是包源码。此次归类只移动可入库模板，不迁移这些运行路径。初始化注册表优先读取 `config/examples/models.json.example`，兼容旧部署根目录的同名模板。
+
 ## 运行结构
 
 ```text

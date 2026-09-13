@@ -10,7 +10,7 @@
 python3 -m venv .venv-dev
 .venv-dev/bin/python -m pip install 'pip>=23'
 .venv-dev/bin/python -m pip install -e '.[dev]' -c constraints/dev.txt
-.venv-dev/bin/python -m unittest discover -s tests -v
+.venv-dev/bin/python -m unittest discover -s tests -t . -v
 .venv-dev/bin/python -m ruff check src tests
 ```
 
@@ -77,19 +77,22 @@ python3 -m venv .venv-dev
 
 ## 测试分层
 
+测试按功能放入 `tests/core/`、`tests/gateway/`、`tests/lifecycle/` 和 `tests/services/`，独立验收脚本放入 `tests/smoke/`。新增测试跟随被测模块归类；跨测试共享夹具用 `tests.<分组>.<模块>` 导入。运行发现命令时以项目根目录为工作目录，使用 `-t .` 保持包名一致。
+
 普通 `unittest discover` 使用临时目录、临时端口、假模型和子进程，不能读真实密钥或改动常驻服务。主要测试可独立运行：
 
 ```bash
-python -m unittest discover -s tests -p 'test_cli*.py' -v
-python -m unittest discover -s tests -p 'test_lifecycle*.py' -v
-python -m unittest discover -s tests -p 'test_gateway*.py' -v
-python -m unittest discover -s tests -p 'test_services*.py' -v
+python -m unittest discover -s tests/core -t . -v
+python -m unittest discover -s tests/lifecycle -t . -p 'test_cli*.py' -v
+python -m unittest discover -s tests/lifecycle -t . -p 'test_lifecycle*.py' -v
+python -m unittest discover -s tests/gateway -t . -p 'test_gateway*.py' -v
+python -m unittest discover -s tests/services -t . -p 'test_services*.py' -v
 ```
 
 macOS 的专用 launchd 测试是显式启用的例外：
 
 ```bash
-LOCAL_LLM_TEST_LAUNCHD=1 python -m unittest discover -s tests -p test_launchd_smoke.py -v
+LOCAL_LLM_TEST_LAUNCHD=1 python -m unittest discover -s tests/lifecycle -t . -p test_launchd_smoke.py -v
 ```
 
 该测试只创建 UUID 命名的测试 LaunchAgent 和临时 HTTP 后端，验证 bootstrap、ready、异常退出恢复、stop 和卸载，最终清理测试 job/plist。它不会重启已注册模型，也不等于已验证用户重新登录后的系统行为。

@@ -1,0 +1,3 @@
+# Apple Silicon Rerank environment.
+# Run from the project root; install explicitly during maintenance.
+-e .[rerank]

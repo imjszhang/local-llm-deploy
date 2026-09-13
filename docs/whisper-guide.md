@@ -4,7 +4,7 @@
 
 ## 安装、下载与启动
 
-按 [DEPLOY.md](../DEPLOY.md) 创建独立 `.venv-whisper`。音频解码通过 `imageio-ffmpeg` 提供的程序，项目 `tools/ffmpeg` 为兼容启动入口。
+按 [部署指南](deployment.md) 创建独立 `.venv-whisper`。音频解码通过 `imageio-ffmpeg` 提供的程序，项目 `tools/ffmpeg` 为兼容启动入口。
 
 ```bash
 ./manage.sh download whisper-large-v3
@@ -13,7 +13,7 @@
 ./manage.sh status whisper-large-v3 --probe
 ```
 
-模型注册条目使用 `type: "asr"`，可配置 alias、default_port、repo_id、repo_name，以及 params.language / task / response_format。下载模式应包含 `*.json`、`*.npz`、`*.safetensors` 等实际权重文件；示例见 `models.json.example`。
+模型注册条目使用 `type: "asr"`，可配置 alias、default_port、repo_id、repo_name，以及 params.language / task / response_format。下载模式应包含 `*.json`、`*.npz`、`*.safetensors` 等实际权重文件；示例见 [模型注册表模板](../config/examples/models.json.example)。
 
 ## API
 

@@ -68,7 +68,7 @@ def main(argv=None, *, paths=None):
     registry = Registry(paths)
     try:
         if args.cmd == "init":
-            template = paths.root / "models.json.example"
+            template = paths.model_template
             raw = load_models(template)
             with file_lock(paths.registry.with_suffix(".json.lock")):
                 if paths.registry.exists() and not args.force:
