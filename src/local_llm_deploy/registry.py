@@ -9,7 +9,10 @@ import threading
 import time
 from pathlib import Path
 
-from .config import ConfigError, ProjectPaths, load_models, normalize_models, project_paths, sanitize_top_level
+from .config import (
+    ConfigError, ProjectPaths, dump_registry, load_registry_document, normalize_models,
+    normalize_registry, project_paths, sanitize_top_level,
+)
 from .storage import atomic_json, file_lock
 
 
@@ -25,7 +28,7 @@ class Registry:
     def load_raw(self, *, refresh=False):
         with self._lock:
             if refresh or self._raw is None or self.clock() - self._loaded >= self.ttl:
-                candidate = load_models(self.paths.registry)
+                candidate = load_registry_document(self.paths.registry)
                 self._raw = candidate
                 self._loaded = self.clock()
             return copy.deepcopy(self._raw)
@@ -33,16 +36,19 @@ class Registry:
     def specs(self, *, refresh=False):
         return normalize_models(self.load_raw(refresh=refresh))
 
+    def proxies(self, *, refresh=False):
+        return normalize_registry(self.load_raw(refresh=refresh))[1]
+
     def update(self, operation):
         with file_lock(self.paths.registry.with_suffix(".json.lock")):
-            raw = load_models(self.paths.registry)
+            raw = load_registry_document(self.paths.registry)
             operation(raw)
-            normalize_models(raw)
+            raw = dump_registry(raw)
             atomic_json(self.paths.registry, raw)
         self.load_raw(refresh=True)
 
     def save(self, raw):
-        normalized = {k: spec.raw for k, spec in normalize_models(raw).items()}
+        normalized = dump_registry(raw)
         with file_lock(self.paths.registry.with_suffix(".json.lock")):
             atomic_json(self.paths.registry, normalized)
         self.load_raw(refresh=True)
@@ -69,7 +75,7 @@ def main(argv=None, *, paths=None):
     try:
         if args.cmd == "init":
             template = paths.model_template
-            raw = load_models(template)
+            raw = load_registry_document(template)
             with file_lock(paths.registry.with_suffix(".json.lock")):
                 if paths.registry.exists() and not args.force:
                     raise ConfigError("models.json 已存在；覆盖需 --force")
@@ -78,21 +84,27 @@ def main(argv=None, *, paths=None):
         elif args.cmd == "merge":
             patch = sanitize_top_level(json.loads(Path(args.file).read_text(encoding="utf-8")))
             registry.update(lambda raw: raw.update(patch))
-            print(f"已合并 {len(patch)} 个模型")
+            print(f"已合并 {len(patch)} 个注册项")
         elif args.cmd == "remove":
             registry.update(lambda raw: raw.pop(args.key))
             print(f"已删除注册项: {args.key}")
         elif args.cmd == "validate":
-            print(f"配置有效：{len(registry.specs())} 个模型")
+            models, proxies = normalize_registry(registry.load_raw())
+            print(f"配置有效：{len(models)} 个模型，{len(proxies)} 个外部服务")
         elif args.cmd == "list":
             for key, spec in registry.specs().items():
                 print(f"{key:28s} {','.join(spec.capabilities):10s} {spec.backend:24s} :{spec.port} {spec.alias}")
+            for key, spec in registry.proxies().items():
+                print(f"{key:28s} {'proxy':10s} {'external_http':24s} :{spec.port} {spec.alias}")
         else:
             raw = registry.load_raw()
             if args.resolved:
+                models, proxies = normalize_registry(raw)
                 raw = {k: dict(s.raw, capabilities=list(s.capabilities), backend=s.backend,
                                management=s.management, endpoints=list(s.endpoints))
-                       for k, s in registry.specs().items()}
+                       for k, s in models.items()}
+                raw.update({k: dict(s.raw, kind="proxy", prefix=s.prefix, host=s.host, port=s.port)
+                            for k, s in proxies.items()})
             value = raw[args.key] if args.key else raw
             print(json.dumps(_redact(value), ensure_ascii=False, indent=2))
         return 0

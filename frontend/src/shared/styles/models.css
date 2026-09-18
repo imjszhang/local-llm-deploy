@@ -481,3 +481,58 @@
   color: #354e5c;
   margin: 0 10px;
 }
+.service-endpoint {
+  font-size: 11px;
+  color: #9eb1bc;
+}
+.service-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  padding: 0 23px 22px;
+}
+.service-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #2b3b45;
+  border-radius: 7px;
+  background: #0d151b;
+  color: inherit;
+  text-decoration: none;
+}
+.service-card:hover {
+  border-color: #629d88;
+  background: #101b21;
+}
+.service-card-copy {
+  min-width: 0;
+  flex: 1;
+}
+.service-card-copy h3 {
+  font-size: 13px;
+  font-weight: 500;
+  color: #d9e4ea;
+}
+.service-card-copy > span,
+.service-card-copy > code {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: #7d96a4;
+}
+.service-card-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.service-open {
+  font-size: 11px;
+  color: #9babb4;
+}
+.service-card:hover .service-open {
+  color: var(--green);
+}

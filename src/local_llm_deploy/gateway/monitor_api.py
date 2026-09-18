@@ -108,7 +108,7 @@ def collect_system():
     data = collect_system_info({}, strict=True)
     return {'cpu': {k: finite(data['cpu'].get(k)) for k in ('user', 'sys', 'idle')},
             'memory': {k: finite(data['memory'].get(k)) for k in
-                       ('total_gb', 'used_gb', 'free_gb', 'wired_gb')},
+                       ('total_gb', 'used_gb', 'free_gb', 'wired_gb', 'cache_gb')},
             'load_avg': [finite(n) for n in data.get('load_avg', [])[:3]]}
 
 
@@ -288,6 +288,7 @@ class MonitorAPI:
         self._request('discovery', self.discovery_ttl, self._discovery)
         specs, catalog_state = self.context.catalog_snapshot()
         lanes, budgets = self.context.scheduler.snapshots()
+        services = self._services()
         with self.lock:
             system = copy.deepcopy(self.cache.get('system', {}).get('data'))
             published = self.cache.get('discovery', {}).get('data') or {}
@@ -311,7 +312,22 @@ class MonitorAPI:
             generated = self.now()
             return {'schema_version': 1, 'snapshot_id': str(generated), 'generated_at': generated,
                     'sources': sources, 'system': system, 'lanes': lanes, 'models': rows,
+                    'services': services,
                     'diagnostics': diagnostics}
+
+    def _services(self):
+        catalog = getattr(self.context, 'proxy_catalog', None)
+        if catalog is None:
+            return []
+        messages = {'healthy': None, 'unready': 'Backend has not reported ready',
+                    'unreachable': 'Backend could not be reached', 'unknown': 'Availability has not been confirmed'}
+        rows = []
+        for row in catalog.rows():
+            state = row['availability']
+            rows.append({'key': row['key'], 'alias': row['alias'], 'upstream': row['upstream'],
+                         'host': row['host'], 'port': row['port'], 'endpoint': row['endpoint'],
+                         'availability': {'state': state, 'reason': row.get('reason') or messages.get(state)}})
+        return sorted(rows, key=lambda row: row['key'])
 
     def _models(self, specs, published, budgets):
         discovered = dict(published.get('models') or {})

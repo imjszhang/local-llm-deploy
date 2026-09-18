@@ -9,8 +9,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
-from .domain import ModelSpec
+from .domain import ModelSpec, ProxySpec
 
 
 class ConfigError(ValueError):
@@ -185,6 +186,90 @@ def _validate_known_fields(key, cfg):
         raise ConfigError(f"{key}: runtime.ready_timeout 必须是有限正数")
 
 
+def _registry_key(key: Any) -> str:
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", key):
+        raise ConfigError(f"无效模型键 {key!r}（不能包含路径分隔符或空白）")
+    return key
+
+
+def _absolute_http_url(key: str, field: str, value: Any) -> str:
+    _string_value(key, field, value, nonempty=True, controls=True)
+    parsed = urlsplit(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.username or parsed.password:
+        raise ConfigError(f"{key}: {field} 必须是不含用户信息的绝对 http(s) URL")
+    if parsed.hostname in (None, "") or any(part in (".", "..") for part in parsed.path.split("/")):
+        raise ConfigError(f"{key}: {field} 必须是不含用户信息的绝对 http(s) URL")
+    return value
+
+
+def _service_path(key: str, field: str, value: Any) -> str:
+    _string_value(key, field, value, nonempty=True, controls=True)
+    if not value.startswith("/") or value.startswith("//") or any(part in (".", "..") for part in value.split("/")):
+        raise ConfigError(f"{key}: {field} 必须是不含 .. 的绝对路径")
+    return value
+
+
+def normalize_proxy(key: str, value: Any) -> ProxySpec:
+    if not isinstance(value, dict):
+        raise ConfigError(f"{key}: 模型配置必须是对象")
+    cfg = copy.deepcopy(value)
+    if cfg.get("type") != "proxy":
+        raise ConfigError(f"{key}: 不是 proxy 条目")
+    for field in ("alias", "full_model_name", "startup_hint", "health_path"):
+        if field in cfg:
+            _string_value(key, field, cfg[field], nullable=field != "health_path",
+                          nonempty=field == "health_path", controls=field == "health_path")
+    upstream = _absolute_http_url(key, "upstream", cfg.get("upstream"))
+    health_path = _service_path(key, "health_path", cfg["health_path"]) if cfg.get("health_path") is not None else "/"
+    timeout = cfg.get("timeout")
+    if timeout is not None and (not _finite_number(timeout) or timeout <= 0):
+        raise ConfigError(f"{key}: timeout 必须是有限正数")
+    if "strip_prefix" in cfg and type(cfg["strip_prefix"]) is not bool:
+        raise ConfigError(f"{key}: strip_prefix 必须是布尔值")
+    methods = cfg.get("methods", ["GET", "HEAD", "POST", "PUT", "DELETE"])
+    allowed_methods = {"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"}
+    if (not isinstance(methods, list) or not methods or
+            any(not isinstance(item, str) or item.upper() not in allowed_methods for item in methods)):
+        raise ConfigError(f"{key}: methods 必须是 HTTP 方法列表")
+    paths = cfg.get("paths")
+    if paths is not None:
+        if not isinstance(paths, list) or not paths or any(not isinstance(item, str) for item in paths):
+            raise ConfigError(f"{key}: paths 必须是非空字符串列表")
+        paths = tuple(_service_path(key, "paths", item) for item in paths)
+    auth = cfg.get("auth", {})
+    if not isinstance(auth, dict):
+        raise ConfigError(f"{key}: auth 必须是对象")
+    gateway = auth.get("gateway", "api_key")
+    upstream_auth = auth.get("upstream", "none")
+    console = auth.get("console", False)
+    if gateway != "api_key":
+        raise ConfigError(f"{key}: auth.gateway 目前只支持 api_key")
+    if upstream_auth not in ("none", "forward_client"):
+        raise ConfigError(f"{key}: auth.upstream 必须是 none 或 forward_client")
+    if type(console) is not bool:
+        raise ConfigError(f"{key}: auth.console 必须是布尔值")
+    if "websocket" in cfg and type(cfg["websocket"]) is not bool:
+        raise ConfigError(f"{key}: websocket 必须是布尔值")
+    if cfg.get("websocket"):
+        raise ConfigError(f"{key}: websocket 本期必须为 false")
+    max_body = cfg.get("max_body_bytes")
+    if max_body is not None and (type(max_body) is not int or isinstance(max_body, bool) or max_body <= 0):
+        raise ConfigError(f"{key}: max_body_bytes 必须是正整数")
+    alias = cfg.get("alias") or key
+    if not isinstance(alias, str) or not alias or any(c in alias for c in ("\n", "\r", "\x00")):
+        raise ConfigError(f"{key}: alias 必须是非空字符串")
+    cfg.setdefault("health_path", health_path)
+    cfg.setdefault("strip_prefix", True)
+    cfg.setdefault("methods", [item.upper() for item in methods])
+    cfg.setdefault("auth", {"gateway": gateway, "upstream": upstream_auth, "console": console})
+    cfg.setdefault("websocket", False)
+    return ProxySpec(
+        key, alias, upstream, health_path, None if timeout is None else float(timeout),
+        bool(cfg.get("strip_prefix", True)), tuple(item.upper() for item in methods), paths,
+        gateway, upstream_auth, console, False, max_body, cfg,
+    )
+
+
 def normalize_models(raw: Any) -> dict[str, ModelSpec]:
     data = sanitize_top_level(raw)
     result: dict[str, ModelSpec] = {}
@@ -194,10 +279,11 @@ def normalize_models(raw: Any) -> dict[str, ModelSpec]:
               "rerank": ("rerank", "mlx_rerank"), "asr": ("asr", "mlx_whisper"),
               "ollama": ("chat", "ollama"), "external": ("chat", "external_http")}
     for key, value in data.items():
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", key):
-            raise ConfigError(f"无效模型键 {key!r}（不能包含路径分隔符或空白）")
+        key = _registry_key(key)
         if not isinstance(value, dict):
             raise ConfigError(f"{key}: 模型配置必须是对象")
+        if value.get("type") == "proxy":
+            continue
         cfg = copy.deepcopy(value)
         _validate_known_fields(key, cfg)
         typ = cfg.get("type") or "chat"
@@ -278,17 +364,63 @@ def normalize_models(raw: Any) -> dict[str, ModelSpec]:
     return result
 
 
-def load_models(path: str | Path | None = None) -> dict[str, Any]:
+def normalize_registry(raw: Any) -> tuple[dict[str, ModelSpec], dict[str, ProxySpec]]:
+    data = sanitize_top_level(raw)
+    proxies: dict[str, ProxySpec] = {}
+    names: dict[str, str] = {}
+    for key, value in data.items():
+        key = _registry_key(key)
+        if isinstance(value, dict) and value.get("type") == "proxy":
+            spec = normalize_proxy(key, value)
+            for name in dict.fromkeys((spec.key, spec.alias)):
+                if name in names and names[name] != key:
+                    raise ConfigError(f"模型别名冲突: {name!r} ({names[name]}, {key})")
+                names[name] = key
+            proxies[key] = spec
+    models = normalize_models(raw)
+    for spec in models.values():
+        for name in dict.fromkeys((spec.key, spec.alias, spec.backend_model)):
+            if name in names and names[name] != spec.key:
+                raise ConfigError(f"模型别名冲突: {name!r} ({names[name]}, {spec.key})")
+            names[name] = spec.key
+    return models, proxies
+
+
+def dump_registry(raw: Any) -> dict[str, Any]:
+    models, proxies = normalize_registry(raw)
+    data = sanitize_top_level(raw)
+    return {key: (proxies[key].raw if key in proxies else models[key].raw) for key in data}
+
+
+def _read_registry_json(path: str | Path | None = None) -> Any:
     target = Path(path) if path is not None else project_paths().registry
     try:
-        raw = json.loads(target.read_text(encoding="utf-8"))
+        return json.loads(target.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ConfigError(f"无法读取注册表 {target}: {exc}") from exc
-    return {k: s.raw for k, s in normalize_models(raw).items()}
+
+
+def load_registry_document(path: str | Path | None = None) -> dict[str, Any]:
+    return dump_registry(_read_registry_json(path))
+
+
+def load_catalog(path: str | Path | None = None) -> tuple[dict[str, ModelSpec], dict[str, ProxySpec]]:
+    return normalize_registry(_read_registry_json(path))
+
+
+def load_models(path: str | Path | None = None) -> dict[str, Any]:
+    models, _proxies = load_catalog(path)
+    return {key: spec.raw for key, spec in models.items()}
 
 
 def load_specs(path: str | Path | None = None) -> dict[str, ModelSpec]:
-    return normalize_models(load_models(path))
+    models, _proxies = load_catalog(path)
+    return models
+
+
+def load_proxies(path: str | Path | None = None) -> dict[str, ProxySpec]:
+    _models, proxies = load_catalog(path)
+    return proxies
 
 
 def load_env_file(path: Path, env: Mapping[str, str] | None = None) -> dict[str, str]:

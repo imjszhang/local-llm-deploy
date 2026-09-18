@@ -11,7 +11,7 @@ import sys
 import urllib.error
 import urllib.request
 
-from .config import ConfigError, load_specs, normalize_models, project_paths
+from .config import ConfigError, load_catalog, load_proxies, load_specs, normalize_models, project_paths
 from .backends import build_ds4, build_gateway, build_service
 from .backends.builders import launchd_settings
 from .lifecycle import launchd
@@ -63,6 +63,43 @@ def _models(paths, *, optional=False):
     return load_specs(paths.registry)
 
 
+def _proxies(paths, *, optional=False):
+    if optional and not paths.registry.exists():
+        return {}
+    return load_proxies(paths.registry)
+
+
+def _proxy(proxies, key):
+    if key in proxies:
+        return proxies[key]
+    matches = [spec for spec in proxies.values() if spec.alias == key]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _reject_proxy(paths, key, verb):
+    spec = _proxy(_proxies(paths, optional=True), key)
+    if spec is not None:
+        raise LifecycleError(f"{spec.key} 是外部服务，由对端自行管理，不能{verb}")
+
+
+def _proxy_status(spec, *, probe=False):
+    from .gateway.discovery import tcp_connect_ok
+    from urllib.parse import urlsplit
+    healthy = None
+    if probe:
+        reachable = tcp_connect_ok(spec.host, spec.port)
+        if not reachable:
+            healthy = False
+        elif urlsplit(spec.upstream).scheme != "http":
+            healthy = True
+        else:
+            healthy = health_ready(spec.host, spec.port, spec.health_path)
+    return {"key": spec.key, "pid": None, "port": spec.port, "alias": spec.alias,
+            "status": ("ready" if healthy else "unavailable") if probe else "external",
+            "management": "external", "healthy": healthy, "kind": "proxy",
+            "upstream": spec.upstream, "endpoint": spec.prefix + "/"}
+
+
 def _model(models, key):
     if key in models:
         return models[key]
@@ -85,6 +122,8 @@ def _start(paths, argv, *, action="start", explicit_ds4=False):
     args = parser.parse_args(argv)
     if action == "foreground":
         args.management = "process"
+    if args.model != "serve-ui":
+        _reject_proxy(paths, args.model, "启动")
     models = _models(paths, optional=args.model == "serve-ui" or explicit_ds4)
     spec = _build(args.model, paths, args, models, validate=not (args.dry_run or action == "plan"), explicit_ds4=explicit_ds4)
     if args.dry_run or action == "plan":
@@ -105,10 +144,15 @@ def _status(paths, argv):
     parser.add_argument("--probe", action="store_true", help="额外执行只读 HTTP 就绪检查")
     args = parser.parse_args(argv)
     models = _models(paths, optional=True)
+    proxies = _proxies(paths, optional=True)
     observations = observe_instances(paths, models, probe=args.probe)
-    selected = [args.model] if args.model else list(dict.fromkeys([*models, *observations]))
+    selected = [args.model] if args.model else list(dict.fromkeys([*models, *observations, *proxies]))
     rows = []
     for key in selected:
+        proxy = proxies.get(key) or (_proxy(proxies, key) if args.model else None)
+        if proxy is not None:
+            rows.append(_proxy_status(proxy, probe=args.probe))
+            continue
         spec = models.get(key)
         observation = observations.get(key)
         if observation:
@@ -137,6 +181,8 @@ def _stop(paths, argv, *, explicit=False):
     args = parser.parse_args(argv)
     if bool(args.model) == args.all:
         parser.error("提供一个模型名或 --all")
+    if args.model:
+        _reject_proxy(paths, args.model, "停止")
     models = _models(paths, optional=True)
     keys = [key for key, spec in models.items() if spec.management != "external"] if args.all else [args.model]
     for key in keys:
@@ -153,6 +199,8 @@ def _daemon(paths, argv, *, explicit_ds4=False):
     parser = _start_options(_parser("daemon"))
     parser.add_argument("operation", choices=("install", "uninstall", "start"), nargs="?", default="start")
     args = parser.parse_args(argv)
+    if args.model not in ("serve-ui", "ds4"):
+        _reject_proxy(paths, args.model, "由 launchd 管理")
     models = _models(paths, optional=args.model in ("serve-ui", "ds4"))
     label = launchd_settings(args.model, "")[0]
     if args.operation == "uninstall":
@@ -320,17 +368,25 @@ def main(argv=None):
             sub = _parser("list")
             sub.add_argument("--json", action="store_true")
             opts = sub.parse_args(args)
-            models = _models(paths)
+            models, proxies = load_catalog(paths.registry)
             observations = observe_instances(paths, models)
-            rows = [{"key": key, "alias": model.alias, "backend": model.backend, "capabilities": model.capabilities,
-                     "port": model.port, "management": model.management,
+            rows = [{"key": key, "alias": model.alias, "backend": model.backend, "capabilities": list(model.capabilities),
+                     "port": model.port, "management": model.management, "kind": "model",
                      "status": observations[key].status if key in observations else ("external" if model.management == "external" else "stopped")}
                     for key, model in models.items()]
+            services = [{"key": key, "alias": spec.alias, "backend": "proxy", "capabilities": [],
+                         "port": spec.port, "management": "external", "kind": "proxy",
+                         "status": "external", "upstream": spec.upstream, "endpoint": spec.prefix + "/"}
+                        for key, spec in proxies.items()]
             if opts.json:
-                print(json.dumps(rows, ensure_ascii=False, indent=2))
+                print(json.dumps([*rows, *services], ensure_ascii=False, indent=2))
             else:
                 for row in rows:
                     print(f"{row['key']:24s} {row['backend']:24s} :{row['port']} {row['status']}  alias={row['alias']}")
+                if services:
+                    print("外部服务:")
+                    for row in services:
+                        print(f"{row['key']:24s} {'proxy':24s} :{row['port']} {row['status']}  alias={row['alias']}  {row['endpoint']}")
             return 0
         if cmd == "status":
             return _status(paths, args)
@@ -376,13 +432,19 @@ def main(argv=None):
             sub.add_argument("operation", choices=("validate", "show"), default="validate", nargs="?")
             sub.add_argument("--resolved", action="store_true")
             opts = sub.parse_args(args)
-            models = _models(paths)
+            models, proxies = load_catalog(paths.registry)
             if opts.operation == "validate":
-                print(f"配置有效: {len(models)} 个模型")
+                print(f"配置有效: {len(models)} 个模型，{len(proxies)} 个外部服务")
             else:
                 content = {key: {"alias": model.alias, "backend": model.backend, "capabilities": model.capabilities,
                                  "management": model.management, "port": model.port, "host": model.host}
                            for key, model in models.items()} if opts.resolved else {key: model.raw for key, model in models.items()}
+                if opts.resolved:
+                    content.update({key: {"kind": "proxy", "alias": spec.alias, "upstream": spec.upstream,
+                                          "prefix": spec.prefix, "host": spec.host, "port": spec.port}
+                                    for key, spec in proxies.items()})
+                else:
+                    content.update({key: spec.raw for key, spec in proxies.items()})
                 print(json.dumps(_redact(content), ensure_ascii=False, indent=2))
             return 0
         parser.error(f"未实现命令: {cmd}")

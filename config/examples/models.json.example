@@ -134,5 +134,21 @@
       "max_concurrent": 1,
       "kv_budget_ratio": 0.85
     }
+  },
+  "comfyui": {
+    "type": "proxy",
+    "alias": "ComfyUI",
+    "upstream": "http://192.168.0.20:8188",
+    "health_path": "/system_stats",
+    "timeout": 120,
+    "strip_prefix": true,
+    "methods": ["GET", "HEAD", "POST", "PUT", "DELETE"],
+    "paths": ["/prompt", "/queue", "/history", "/view", "/upload/image", "/object_info", "/system_stats"],
+    "auth": {
+      "gateway": "api_key",
+      "upstream": "none",
+      "console": false
+    },
+    "websocket": false
   }
 }

@@ -1,5 +1,5 @@
 import type {
-  ChatControls, DataState, Diagnostic, Lane, LaneKey, ModelDetail, MonitorModel, PublicOverview,
+  ChatControls, DataState, Diagnostic, Lane, LaneKey, ModelDetail, MonitorModel, MonitorService, PublicOverview,
   Section, Snapshot, SourceState, SystemData,
 } from '../api/types'
 
@@ -36,7 +36,8 @@ export const parseSystem = (v: unknown): SystemData => {
   return {
     cpu: { user: nullableNumber(cpu.user), sys: nullableNumber(cpu.sys), idle: nullableNumber(cpu.idle) },
     memory: { total_gb: nullableNumber(mem.total_gb), used_gb: nullableNumber(mem.used_gb),
-      free_gb: nullableNumber(mem.free_gb), wired_gb: nullableNumber(mem.wired_gb) },
+      free_gb: nullableNumber(mem.free_gb), wired_gb: nullableNumber(mem.wired_gb),
+      cache_gb: mem.cache_gb === undefined ? null : nullableNumber(mem.cache_gb) },
     load_avg: array(o.load_avg, nullableNumber, 3),
   }
 }
@@ -78,17 +79,28 @@ const model = (v: unknown): MonitorModel => {
     loaded: nullableBoolean(o.loaded), endpoint: nullableString(o.endpoint),
   }
 }
+const service = (v: unknown): MonitorService => {
+  const o = object(v), availability = object(o.availability)
+  return {
+    key: string(o.key), alias: string(o.alias), upstream: string(o.upstream),
+    host: string(o.host), port: number(o.port), endpoint: string(o.endpoint),
+    availability: { state: oneOf(availability.state, ['healthy', 'unready', 'unauthorized', 'unreachable', 'unknown']), reason: nullableString(availability.reason) },
+  }
+}
 export function parseSnapshot(value: unknown): Snapshot {
   const o = object(value), sources = object(o.sources), laneValues = object(o.lanes)
   if (o.schema_version !== 1) return fail()
   const models = array(o.models, model)
+  const services = o.services === undefined ? [] : array(o.services, service)
   if (new Set(models.map(m => m.key)).size !== models.length) return fail()
+  if (new Set(services.map(item => item.key)).size !== services.length) return fail()
   return {
     schema_version: 1, snapshot_id: string(o.snapshot_id), generated_at: number(o.generated_at),
     sources: { system: source(sources.system), catalog: source(sources.catalog), discovery: source(sources.discovery) },
     system: o.system === null ? null : parseSystem(o.system),
     lanes: Object.fromEntries(lanes.map(key => [key, lane(laneValues[key])])) as Record<LaneKey, Lane>,
     models,
+    services,
     diagnostics: array(o.diagnostics, (v): Diagnostic => {
       const d = object(v)
       return { code: string(d.code), severity: oneOf(d.severity, ['info', 'warning', 'error']), message: string(d.message), model_key: nullableString(d.model_key) }

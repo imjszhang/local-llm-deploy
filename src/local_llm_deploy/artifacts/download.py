@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import sys
 
-from ..config import ConfigError, load_env_file, load_specs, project_paths
+from ..config import ConfigError, load_env_file, load_proxies, load_specs, project_paths
 from ..storage import file_lock
 from .manifest import Manifest
 from .paths import installation_lock, repo_name, resolve_target_dir, selected_quant, weights_complete
@@ -109,6 +109,9 @@ def main(argv=None, *, paths=None):
     args = parser.parse_args(argv)
     paths = paths or project_paths(args.project_root)
     try:
+        proxies = load_proxies(paths.registry) if paths.registry.exists() else {}
+        if args.model_name in proxies or any(spec.alias == args.model_name for spec in proxies.values()):
+            raise ConfigError(f"{args.model_name} 是外部服务，由对端自行管理，不能下载")
         spec = load_specs(paths.registry)[args.model_name]
         plan = plan_download(spec, paths, quant=args.quant, source=args.source,
                              to_path=args.to_path, revision=args.revision)

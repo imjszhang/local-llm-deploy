@@ -11,7 +11,7 @@ export interface SourceState {
 }
 export interface SystemData {
   cpu: { user: number | null; sys: number | null; idle: number | null }
-  memory: { total_gb: number | null; used_gb: number | null; free_gb: number | null; wired_gb: number | null }
+  memory: { total_gb: number | null; used_gb: number | null; free_gb: number | null; wired_gb: number | null; cache_gb: number | null }
   load_avg: (number | null)[]
 }
 export interface Lane { active: number; waiting: number; max: number; queue_depth: number }
@@ -43,6 +43,15 @@ export interface MonitorModel {
   loaded: boolean | null
   endpoint: string | null
 }
+export interface MonitorService {
+  key: string
+  alias: string
+  upstream: string
+  host: string
+  port: number
+  endpoint: string
+  availability: { state: 'healthy' | 'unready' | 'unauthorized' | 'unreachable' | 'unknown'; reason: string | null }
+}
 export interface Snapshot {
   schema_version: 1
   snapshot_id: string
@@ -51,6 +60,7 @@ export interface Snapshot {
   system: SystemData | null
   lanes: Record<LaneKey, Lane>
   models: MonitorModel[]
+  services: MonitorService[]
   diagnostics: Diagnostic[]
 }
 export interface Metric { name: string; value: number | null; unit: string }

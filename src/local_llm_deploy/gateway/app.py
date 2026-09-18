@@ -13,12 +13,14 @@ import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from local_llm_deploy.config import load_specs, project_paths
+from local_llm_deploy.config import load_catalog, project_paths
 from local_llm_deploy.observability import AccessLogger, log
 from .auth import ApiAuth, BackendAuthError, ConsoleSessions, backend_credentials
 from .chat_store import ChatStore, MAX_BYTES as CHAT_MAX_BYTES, chat_target, parse_payload
 from .discovery import Discovery
 from .knowledge import is_knowledge_path, knowledge_backend_url, knowledge_redirect_location
+from .proxies import (ProxyCatalog, is_service_path, parse_service_request, path_allowed,
+                      service_backend_url)
 from .monitoring import Monitoring
 from .monitor_api import MonitorAPI, monitor_target
 from .routing import Router, RoutingError, normalize_proxy_path
@@ -28,7 +30,7 @@ from .transport import ResponseWriter, Transport, _client_disconnected
 
 
 class GatewayContext:
-    def __init__(self, paths=None, *, settings=None, specs=None, discovery=None,
+    def __init__(self, paths=None, *, settings=None, specs=None, proxies=None, discovery=None,
                  scheduler=None, transport=None, auth=None, monitoring=None,
                  spec_loader=None, registry_ttl=30, clock=time.monotonic, monitor_api=None):
         self.paths = paths or project_paths()
@@ -39,10 +41,16 @@ class GatewayContext:
         self._refresh_lock = threading.Lock()
         self._registry_attempt_at = self._registry_success_at = int(time.time() * 1000)
         self._registry_error = None
-        self._spec_loader = spec_loader or (None if specs is not None else load_specs)
+        self._spec_loader = spec_loader or (None if specs is not None else load_catalog)
         self._registry_ttl, self._clock = registry_ttl, clock
         self._loaded_at = clock()
-        self.specs = specs if specs is not None else load_specs(self.paths.registry)
+        if specs is not None:
+            self.specs = specs
+            self.proxies = {} if proxies is None else proxies
+        else:
+            loaded = self._spec_loader(self.paths.registry)
+            self.specs, self.proxies = loaded if isinstance(loaded, tuple) else (loaded, {})
+        self.proxy_catalog = ProxyCatalog(self.proxies, ttl=self.settings.discovery_ttl, clock=clock)
         self.discovery = discovery or Discovery(self.paths, self.specs, self.settings)
         self.scheduler = scheduler or Scheduler(self.settings)
         self.scheduler.register_models(self.specs)
@@ -79,19 +87,24 @@ class GatewayContext:
             with self._catalog_lock:
                 self._registry_attempt_at = int(time.time() * 1000)
             try:
-                candidate = self._spec_loader(self.paths.registry)
+                loaded = self._spec_loader(self.paths.registry)
             except (OSError, ValueError):
                 with self._catalog_lock:
                     self._registry_error = {'code': 'registry_invalid',
                                             'message': 'Registry refresh failed; last validated configuration is retained'}
                 log.warning('Registry refresh failed; keeping last validated configuration')
                 return
+            if isinstance(loaded, tuple):
+                candidate, candidate_proxies = loaded
+            else:
+                candidate, candidate_proxies = loaded, self.proxies
             router = Router(candidate, self.settings)
             with self._catalog_lock:
                 self.scheduler.register_models(candidate)
                 if hasattr(self.discovery, 'update_specs'):
                     self.discovery.update_specs(candidate)
-                self.specs, self.router = candidate, router
+                self.specs, self.router, self.proxies = candidate, router, candidate_proxies
+                self.proxy_catalog.update(candidate_proxies)
                 self._registry_success_at = int(time.time() * 1000)
                 self._registry_error = None
         finally:
@@ -168,6 +181,10 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         writer = ResponseWriter(self)
         self._console_response = urlsplit(self.path).path.startswith(('/console-api', '/chat-api'))
         try:
+            if is_service_path(self.path):
+                spec, _remainder = self._service_target(normalize_proxy_path(self.path))
+                self._content_length(spec.max_body_bytes)
+                return super().handle_expect_100()
             path = urlsplit(self.path if is_knowledge_path(self.path) else normalize_proxy_path(self.path)).path
             if is_knowledge_path(self.path) and self._known_console_authorization():
                 raise RoutingError(401, 'Console session does not authorize knowledge requests')
@@ -247,7 +264,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 raise RoutingError(400, 'Chat history request body is required')
         return identifier
 
-    def _content_length(self):
+    def _content_length(self, limit=None):
         if self.headers.get('Transfer-Encoding'):
             raise RoutingError(400, 'Chunked request bodies are not supported')
         values = self.headers.get_all('Content-Length', [])
@@ -259,16 +276,58 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             raise RoutingError(400, 'Invalid Content-Length') from None
         if length < 0:
             raise RoutingError(400, 'Invalid Content-Length')
-        if length > self.context.settings.max_body_bytes:
+        ceiling = self.context.settings.max_body_bytes if limit is None else limit
+        if length > ceiling:
             raise RoutingError(413, 'Request body exceeds configured size limit')
         return length
 
-    def _body(self):
-        length = self._content_length()
+    def _body(self, limit=None):
+        length = self._content_length(limit)
         body = self.rfile.read(length) if length else None
         if length and len(body) != length:
             raise RoutingError(400, 'Incomplete request body')
         return body
+
+    def _websocket_requested(self):
+        return self.headers.get('Upgrade', '').lower() == 'websocket'
+
+    def _service_headers(self, spec):
+        headers = dict(self.headers)
+        if spec.auth_upstream == 'none':
+            headers = {key: value for key, value in headers.items() if key.lower() != 'authorization'}
+        return headers
+
+    def _service_target(self, request_path):
+        ctx = self.context
+        ctx.refresh()
+        if self._websocket_requested():
+            raise RoutingError(501, 'WebSocket proxying is not supported')
+        key, remainder = parse_service_request(request_path)
+        spec = None if key is None else ctx.proxies.get(key)
+        console = self._known_console_authorization()
+        if spec is not None and spec.auth_console and console:
+            pass
+        elif not self._authorized(urlsplit(request_path).path):
+            raise RoutingError(401, 'Invalid API key', code='invalid_request_error')
+        elif console:
+            raise RoutingError(401, 'Console session does not authorize service requests')
+        if spec is None:
+            raise RoutingError(404, 'Unknown service endpoint')
+        if self.command not in spec.methods:
+            raise RoutingError(405, 'Method not allowed')
+        if not path_allowed(spec.paths, remainder):
+            raise RoutingError(404, 'Unknown service endpoint')
+        if ctx.proxy_catalog.availability(key) != 'healthy':
+            raise RoutingError(503, 'Service is not ready')
+        return spec, remainder
+
+    def _dispatch_service(self, writer, request_path):
+        ctx = self.context
+        spec, remainder = self._service_target(request_path)
+        body = self._body(spec.max_body_bytes)
+        timeout = spec.timeout if spec.timeout is not None else ctx.settings.api_timeout
+        ctx.transport.forward(self, writer, service_backend_url(spec, remainder),
+                              self.command, body, self._service_headers(spec), timeout=timeout)
 
     def _json(self, writer, payload):
         writer.start(200, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'})
@@ -293,6 +352,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 body = self._body()
                 ctx.transport.forward(self, writer, knowledge_backend_url(self.path, ctx.settings.knowledge_url),
                                       self.command, body, dict(self.headers), timeout=ctx.settings.knowledge_timeout)
+                return
+            if is_service_path(self.path):
+                self._dispatch_service(writer, normalize_proxy_path(self.path))
                 return
             request_path = normalize_proxy_path(self.path)
             path = urlsplit(request_path).path

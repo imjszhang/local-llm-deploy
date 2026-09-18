@@ -79,6 +79,7 @@ PID 仍位于 `run/<key>.pid`，前三行格式保持：
 | 默认 `/api/...` | 显式默认模型代理；统一认证 |
 | `/api/ollama/...` | Ollama 兼容代理；推理和操作请求均认证 |
 | `/knowledge/` | 独立知识库反代；路径重写和客户端 Authorization 保留，不替换成模型 Key |
+| `/services/<key>/` | `type: proxy` 外部 HTTP 反代；模型 API Key、默认剥 Authorization、禁止 WebSocket；不进入 `/v1/models` |
 | `/monitor.html` | 保留监控页面 URL；需要后端访问时由页面提供会话内 Key 输入 |
 
 只读 API 例外是精确的 `/api/models`、`/api/system`，不能通过后缀或其他代理路径推断免认证。静态页面和知识库使用各自的处理路径。`.api-key` 缺失或首行为空时，与原行为一致不启用本地模型 Key 校验。

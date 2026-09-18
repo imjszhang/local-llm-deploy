@@ -3,28 +3,28 @@
   "entry": "monitor.html",
   "files": [
     {
+      "path": "monitor-assets/ChatWorkspace-Cczfw1d-.js",
+      "sha256": "88c17c3e3d8244b9117df9b32ee32b0086e6232eb1aeceeeb5bcbf6e7e0e9ab0",
+      "bytes": 181721,
+      "gzip_bytes": 69608
+    },
+    {
       "path": "monitor-assets/ChatWorkspace-DBo1LCsj.css",
       "sha256": "1f154a4e839cb57743a50423b31d8d44c56d851e7ec4f89a73e43660fe793c45",
       "bytes": 19727,
       "gzip_bytes": 4314
     },
     {
-      "path": "monitor-assets/ChatWorkspace-MLNpdZBK.js",
-      "sha256": "7b11dd91fc2992a2233f81b2cf0e09aa8c4cd9a5bd9cc98c0bd91ef9785c257e",
-      "bytes": 181721,
-      "gzip_bytes": 69608
+      "path": "monitor-assets/monitor-BiNW-dMl.css",
+      "sha256": "565fd30a4a2a34efa45bb40b96b91c111e427b3437ac9719436692e040e6b1f4",
+      "bytes": 36864,
+      "gzip_bytes": 8524
     },
     {
-      "path": "monitor-assets/monitor-ByNs0ZXF.js",
-      "sha256": "7fb429742ed2cfeb0084065bd3dcb9c2e1e7d75b5ed69fda3ce384917a79c8da",
-      "bytes": 129603,
-      "gzip_bytes": 47453
-    },
-    {
-      "path": "monitor-assets/monitor-Czc_NHeO.css",
-      "sha256": "95d57822e9ae98f53b893e4903a2813f90b66be31fedd9940db411f1b40a160e",
-      "bytes": 36069,
-      "gzip_bytes": 8369
+      "path": "monitor-assets/monitor-CiEisUbx.js",
+      "sha256": "6c72ecaa3b64d03c04db289a78127886270b808b7394286e22bab93bdced6021",
+      "bytes": 132133,
+      "gzip_bytes": 48207
     },
     {
       "path": "monitor-assets/monitor-icon-DHaTF3UT.svg",
@@ -34,13 +34,13 @@
     },
     {
       "path": "monitor.html",
-      "sha256": "b16fa1415338e9db04291cdf122cbd9a7e452acdc354d7641a58b117490dda69",
+      "sha256": "72711103b71d01c5855ca036640f5aef4108c3bde21f80a93f51dd2f2f0e450f",
       "bytes": 723,
-      "gzip_bytes": 459
+      "gzip_bytes": 456
     }
   ],
   "gzip": {
-    "javascript": 117061,
-    "css": 12683
+    "javascript": 117815,
+    "css": 12838
   }
 }

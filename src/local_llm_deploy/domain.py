@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,39 @@ class ModelSpec:
                   "embedding": ("/v1/embeddings",), "rerank": ("/v1/rerank",),
                   "asr": ("/v1/audio/transcriptions",)}
         return tuple(p for c in self.capabilities for p in routes[c])
+
+
+@dataclass(frozen=True)
+class ProxySpec:
+    key: str
+    alias: str
+    upstream: str
+    health_path: str
+    timeout: float | None
+    strip_prefix: bool
+    methods: tuple[str, ...]
+    paths: tuple[str, ...] | None
+    auth_gateway: str
+    auth_upstream: str
+    auth_console: bool
+    websocket: bool
+    max_body_bytes: int | None
+    raw: dict[str, Any] = field(repr=False)
+
+    @property
+    def host(self) -> str:
+        return str(urlsplit(self.upstream).hostname or "127.0.0.1")
+
+    @property
+    def port(self) -> int:
+        parsed = urlsplit(self.upstream)
+        if parsed.port:
+            return parsed.port
+        return 443 if parsed.scheme == "https" else 80
+
+    @property
+    def prefix(self) -> str:
+        return f"/services/{self.key}"
 
 
 @dataclass(frozen=True)

@@ -22,7 +22,7 @@ export function createSnapshot(now = Date.now()): Snapshot {
     sources: { system: source(now), catalog: source(now), discovery: source(now) },
     system: {
       cpu: { user: 28.4, sys: 6.8, idle: 64.8 },
-      memory: { total_gb: 128, used_gb: 76.8, free_gb: 51.2, wired_gb: 10.2 },
+      memory: { total_gb: 128, used_gb: 76.8, free_gb: 51.2, wired_gb: 10.2, cache_gb: 24.0 },
       load_avg: [4.21, 3.86, 3.42],
     },
     lanes: {
@@ -65,6 +65,11 @@ export function createSnapshot(now = Date.now()): Snapshot {
         monitoring_support: { health: true, metrics: false, slots: false, process_stats: false, output: false },
       }),
     ],
+    services: [{
+      key: 'comfyui', alias: 'ComfyUI', upstream: 'http://192.168.0.20:8188',
+      host: '192.168.0.20', port: 8188, endpoint: '/services/comfyui/',
+      availability: { state: 'healthy', reason: null },
+    }],
     diagnostics: [{ code: 'backend_unreachable', severity: 'warning', model_key: 'deepseek-v4', message: 'DeepSeek V4 Flash 暂不可用，其他模型可继续调用。' }],
   }
 }

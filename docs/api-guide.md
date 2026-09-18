@@ -11,10 +11,13 @@
 - 默认后端 `/api/*` 转发。
 - `/api/ollama/*` 原生推理及操作代理。
 - `/monitor-api/v1/*` 完整监控快照和模型详情。
+- `/services/<key>/*` 外部 HTTP 服务反代。
 
 仅 `GET/HEAD /api/models` 和 `/api/system` 作为明确的只读监控例外。监控页面支持在当前页面内存输入 Key；Key 不写入静态资源、URL 或浏览器持久存储。
 
 `/knowledge/` 保持独立凭据语义：转发知识库客户端 Authorization，不用模型 Key 覆盖。
+
+`/services/<key>/` 使用模型 API Key；默认不转发 `Authorization`（`auth.upstream=none`），控制台 session 不能当业务凭证。`Upgrade: websocket` 返回 501。未探活返回 503，未知键或未允许路径返回 404。这些键不出现在 `GET /v1/models`。
 
 网关入口 Key 与后端 Key 可以不同。转发和健康探测按“运行实例记录的 `api_key_file` → 模型 `runtime.api_key_file` → 项目 `.api-key`”读取后端凭据；PID 只记录文件引用和来源。通过 `--api-key` / `API_KEY` 启动的内联密钥不能由另一个网关进程可靠恢复，直连仍可使用，代理会返回不可用诊断；需要代理时改用 `--api-key-file` / `API_KEY_FILE`，或配置 `runtime.api_key_file` 后重新启动。缺失凭据文件也会显示在监控 `unavailable_backends` 中，不向客户端暴露密钥。
 
@@ -31,6 +34,7 @@
 | `/api/<模型键>/*` | 按路径选择已注册后端 | 依端点校验 |
 | `/api/ollama/*` | Ollama 原生接口 | 原生推理也经过调度 |
 | `/knowledge/*` | 外部知识库反代 | 不属于模型 API |
+| `/services/<key>/*` | 登记为 `type: proxy` 的外部 HTTP 反代 | 不属于模型 API，不占 lane |
 
 Responses / Messages 仅在模型 `endpoints` 显式包含 `/v1/responses`、`/v1/messages` 时开放。网关提供透传与相应流式错误封装，实际模型后端必须支持对应协议。
 
@@ -40,7 +44,7 @@ Responses / Messages 仅在模型 `endpoints` 显式包含 `/v1/responses`、`/v
 
 | 接口（GET/HEAD） | 数据 |
 | --- | --- |
-| `/monitor-api/v1/snapshot` | 系统资源、全部注册及发现模型、网关通道和诊断 |
+| `/monitor-api/v1/snapshot` | 系统资源、全部注册及发现模型、可选 `services` 外部服务、网关通道和诊断 |
 | `/monitor-api/v1/models/<编码后的模型键>` | 健康、指标、槽位、已确认归属的进程资源和 Ollama 信息 |
 | 同上，`?include_output=1` | 显式读取源端已有的有界调试输出；默认不包含正文 |
 

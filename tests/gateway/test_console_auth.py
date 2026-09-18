@@ -169,7 +169,8 @@ class ConsoleHTTPTests(unittest.TestCase):
     def test_scope_and_connection_boundaries_checked_on_every_use(self):
         token = self.issue()
         headers = {**self.local_headers, 'Authorization': 'Bearer ' + token}
-        for path in ('/v1/models', '/api/chat/health', '/api/ollama/api/tags', '/knowledge/items'):
+        for path in ('/v1/models', '/api/chat/health', '/api/ollama/api/tags', '/knowledge/items',
+                     '/services/unknown/system_stats'):
             self.assertEqual(self.request(path, headers=headers)[0], 401, path)
         for path in ('/v1/embeddings', '/api/chat/v1/chat/completions', '/v1/responses'):
             self.assertEqual(self.request(path, {'model': 'friendly-chat'}, headers)[0], 401, path)

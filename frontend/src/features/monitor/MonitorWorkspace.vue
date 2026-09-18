@@ -7,6 +7,7 @@ import AccessDialog from "../../shared/components/AccessDialog.vue";
 import Sparkline from "./components/Sparkline.vue";
 import StatusBadge from "../../shared/components/StatusBadge.vue";
 import ModelTable from "./components/ModelTable.vue";
+import ServiceTable from "./components/ServiceTable.vue";
 import ModelDrawer from "./components/ModelDrawer.vue";
 import {
   cpuUsage,
@@ -44,6 +45,7 @@ const system = computed(() =>
   snapshot.value ? snapshot.value.system : publicOverview.value?.system || null,
 );
 const models = computed(() => snapshot.value?.models || []);
+const services = computed(() => snapshot.value?.services || []);
 const selectedModel = computed(
   () => models.value.find((model) => model.key === selectedKey.value) || null,
 );
@@ -165,6 +167,14 @@ onBeforeUnmount(() => {
       <nav class="topbar-actions" aria-label="控制台导航">
         <a class="knowledge-link" href="/knowledge/"
           >知识库 <span aria-hidden="true">↗</span></a
+        ><a
+          v-for="service in services"
+          :key="service.key"
+          class="knowledge-link"
+          :href="service.upstream"
+          target="_blank"
+          rel="noopener noreferrer"
+          >{{ service.alias }} <span aria-hidden="true">↗</span></a
         ><span class="nav-divider" /><button
           class="button button--quiet access-button"
           @click="openAccess"
@@ -336,11 +346,15 @@ onBeforeUnmount(() => {
             :now="now"
             :max="memory?.total_gb || undefined"
             color="blue"
-            label="系统内存使用量：本页近五分钟趋势"
+            label="系统应用内存：本页近五分钟趋势"
           />
           <div class="metric-footnote">
-            <span>空闲 {{ number(memory?.free_gb, 1) }} GB</span
-            ><span>系统物理内存</span>
+            <span
+              >可用 {{ number(memory?.free_gb, 1) }} GB<span
+                v-if="isReading(memory?.cache_gb)"
+                > · 缓存 {{ number(memory?.cache_gb, 1) }} GB</span
+              ></span
+            ><span>应用占用，不含文件缓存</span>
           </div>
         </article>
         <article class="metric-card metric-card--services panel">
@@ -497,6 +511,7 @@ onBeforeUnmount(() => {
         </button>
       </section>
 
+      <ServiceTable :services="services" />
       <ModelTable
         :models="models"
         :loading="loading"

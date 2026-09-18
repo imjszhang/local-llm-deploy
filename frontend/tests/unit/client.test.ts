@@ -36,6 +36,12 @@ describe('monitor API boundary', () => {
     expect(parseDetail(sampleDetail(), 'chat').slots.items[0]?.generated).toBeUndefined()
     expect(parseDetail(sampleDetail(), 'chat', true).slots.items[0]?.generated).toBe('sensitive output')
   })
+  it('treats missing cache_gb as unknown instead of inventing a cache reading', () => {
+    const data = sampleSnapshot()
+    const system = data.system!
+    const { cache_gb: _, ...legacyMemory } = system.memory
+    expect(parseSnapshot({ ...data, system: { ...system, memory: legacyMemory } }).system?.memory.cache_gb).toBeNull()
+  })
   it('validates nested numbers and preserves null readings', () => {
     const data = sampleSnapshot()
     data.system!.cpu.user = null
@@ -45,6 +51,20 @@ describe('monitor API boundary', () => {
     expect(() => parseSnapshot({ ...sampleSnapshot(), models: [{}] })).toThrow()
     expect(() => parseSnapshot({ ...sampleSnapshot(), schema_version: 2 })).toThrow()
     expect(() => parseDetail(sampleDetail('other'), 'chat')).toThrow()
+  })
+  it('defaults missing services and accepts a registered proxy row', () => {
+    const data = sampleSnapshot()
+    const raw = { ...data } as { services?: unknown }
+    delete raw.services
+    expect(parseSnapshot(raw).services).toEqual([])
+    data.services = [{
+      key: 'comfyui', alias: 'ComfyUI', upstream: 'http://192.168.0.20:8188',
+      host: '192.168.0.20', port: 8188, endpoint: '/services/comfyui/',
+      availability: { state: 'healthy', reason: null },
+    }]
+    expect(parseSnapshot(data).services).toEqual(data.services)
+    data.services.push({ ...data.services[0]! })
+    expect(() => parseSnapshot(data)).toThrow('监控响应格式无效')
   })
   it('sanitizes network and server errors without echoing secret data', async () => {
     const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new Error('Authorization: private-key; https://private-host'))

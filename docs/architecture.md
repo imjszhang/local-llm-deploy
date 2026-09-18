@@ -1,6 +1,6 @@
 # 架构与模块职责
 
-更新：2026-09-13。
+更新：2026-09-18。
 
 ## 仓库目录
 
@@ -58,7 +58,7 @@
 
 | 模块 | 职责 |
 | --- | --- |
-| `config.py` / `domain.py` | 项目路径、模型校验、共享数据结构 |
+| `config.py` / `domain.py` | 项目路径、模型与 `ProxySpec` 校验、共享数据结构 |
 | `registry.py` / `storage.py` | 原子注册表更新、缓存、文件锁 |
 | `artifacts/paths.py` | 默认路径、安装选择、量化与 GGUF 分片检查 |
 | `artifacts/manifest.py` | 安装登记，保留 version=1 清单格式 |
@@ -68,7 +68,7 @@
 | `gateway/discovery.py` / `routing.py` | 在线后端发现、能力与端点匹配、别名和默认模型 |
 | `gateway/scheduling.py` | 原子分配 lane 与模型预算，排队优先级、占用释放 |
 | `gateway/transport.py` | HTTP、SSE、保活、有界缓冲、断开与不确定状态 |
-| `gateway/auth.py` / `knowledge.py` | 模型 Key 策略与独立知识库凭据转发 |
+| `gateway/auth.py` / `knowledge.py` / `proxies.py` | 模型 Key、独立知识库反代，以及 `/services/<key>/` 通用外部 HTTP 转发 |
 | `gateway/monitoring.py` / `observability.py` | 资源观测、状态字段、请求 ID、有限日志采集 |
 | `gateway/monitor_api.py` | 认证只读 DTO、有界采集缓存、来源状态及后端监控差异 |
 | `services/` | 共享 HTTP 边界及三种独立模型适配器 |
@@ -102,6 +102,8 @@ Chat 默认并发 1；Embedding 为 2；Rerank 和 ASR 各为 1。Embedding 内�
 模型权重保留在 `models/`，manifest 明确选择安装路径。同量化多安装不任意选取，需 `--model-dir`。下载、启动和删除使用协调锁，清单更新使用独立读改写锁。外部服务与模型 API 代理的生命周期归属分开。
 
 `/knowledge/` 仅反向代理外部知识库，转发客户端 Authorization；它不是本仓库的 RAG 或知识库实现。
+
+`type: proxy` 与 `ModelSpec` 写在同一张 `models.json` 里，但不进入 `normalize_models()`、`/v1/models` 或对话 lane。网关只做鉴权、路径白名单和 HTTP 转发；探活走 TCP + `health_path`，不占用 Scheduler。入口为 `/services/<key>/`。本期不提供 WebSocket 隧道，浏览器完整页仍直连上游。
 
 ### 对话工作区
 

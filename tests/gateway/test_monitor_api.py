@@ -21,7 +21,7 @@ from local_llm_deploy.gateway.monitor_api import CollectionError, MonitorAPI, co
 from local_llm_deploy.gateway.settings import GatewaySettings
 
 SYSTEM = {'cpu': {'user': 0, 'sys': 3, 'idle': 97},
-          'memory': {'total_gb': 64, 'used_gb': 12, 'free_gb': 52, 'wired_gb': 2}, 'load_avg': [1, 2, 3]}
+          'memory': {'total_gb': 64, 'used_gb': 12, 'free_gb': 52, 'wired_gb': 2, 'cache_gb': 8}, 'load_avg': [1, 2, 3]}
 
 
 class FakeDiscovery:
@@ -137,6 +137,7 @@ class MonitorContractTests(MonitorFixture):
         data = self.snapshot()
         rows = {m['key']: m for m in data['models']}
         self.assertEqual(data['schema_version'], 1)
+        self.assertEqual(data['services'], [])
         self.assertGreater(data['generated_at'], 1_000_000_000_000)
         self.assertEqual(set(data['lanes']), {'chat', 'embed', 'rerank', 'asr'})
         self.assertEqual(rows['offline']['lifecycle']['state'], 'unknown')
@@ -151,6 +152,23 @@ class MonitorContractTests(MonitorFixture):
         self.assertTrue(all(row['chat_controls'] is None for row in rows.values()))
         self.assertNotIn(str(self.paths.root), json.dumps(data))
         self.assertEqual(data['system']['cpu']['user'], 0)
+
+    def test_snapshot_lists_proxy_services_outside_models(self):
+        from local_llm_deploy.config import normalize_proxy
+        spec = normalize_proxy('comfyui', {
+            'type': 'proxy', 'alias': 'ComfyUI', 'upstream': 'http://192.168.0.20:8188',
+            'health_path': '/system_stats',
+        })
+        self.context.proxies = {'comfyui': spec}
+        self.context.proxy_catalog.probe = lambda *a, **k: True
+        self.context.proxy_catalog.health = lambda *a, **k: True
+        self.context.proxy_catalog.update({'comfyui': spec})
+        data = self.snapshot()
+        self.assertEqual([row['key'] for row in data['services']], ['comfyui'])
+        self.assertEqual(data['services'][0]['host'], '192.168.0.20')
+        self.assertEqual(data['services'][0]['endpoint'], '/services/comfyui/')
+        self.assertEqual(data['services'][0]['availability']['state'], 'healthy')
+        self.assertNotIn('comfyui', {row['key'] for row in data['models']})
 
     def test_uncertain_retains_reservation_and_blocks_route(self):
         ticket = self.context.scheduler.submit('chat', 'chat', tokens=30)

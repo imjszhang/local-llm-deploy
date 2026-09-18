@@ -155,6 +155,26 @@ class CliTests(unittest.TestCase):
             self.invoke("start", "chat", "--mispelled-option")
         self.assertEqual(raised.exception.code, 2)
 
+    def test_proxy_is_listed_and_rejected_for_lifecycle(self):
+        self.raw["comfyui"] = {
+            "type": "proxy", "alias": "ComfyUI", "upstream": "http://127.0.0.1:8188",
+            "health_path": "/system_stats", "websocket": False,
+        }
+        self.paths.registry.write_text(json.dumps(self.raw))
+        code, out, err = self.invoke("list", "--json")
+        self.assertEqual(code, 0, err)
+        rows = {row["key"]: row for row in json.loads(out)}
+        self.assertEqual(rows["comfyui"]["kind"], "proxy")
+        self.assertEqual(rows["comfyui"]["endpoint"], "/services/comfyui/")
+        self.assertNotIn("chat", rows["comfyui"]["capabilities"])
+        code, out, err = self.invoke("status", "--json")
+        self.assertEqual(code, 0, err)
+        self.assertIn("comfyui", {row["key"] for row in json.loads(out)})
+        for args in (("start", "comfyui", "--dry-run"), ("stop", "comfyui"), ("download", "comfyui", "--dry-run")):
+            code, _, err = self.invoke(*args)
+            self.assertEqual(code, 1, args)
+            self.assertIn("外部服务", err)
+
     def test_compat_help_does_not_require_models(self):
         self.paths.registry.unlink()
         for entry in ("jina", "whisper", "ds4", "serve-ui"):
