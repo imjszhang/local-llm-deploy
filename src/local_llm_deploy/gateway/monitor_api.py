@@ -289,6 +289,7 @@ class MonitorAPI:
         specs, catalog_state = self.context.catalog_snapshot()
         lanes, budgets = self.context.scheduler.snapshots()
         services = self._services()
+        apps = self._apps()
         with self.lock:
             system = copy.deepcopy(self.cache.get('system', {}).get('data'))
             published = self.cache.get('discovery', {}).get('data') or {}
@@ -312,7 +313,7 @@ class MonitorAPI:
             generated = self.now()
             return {'schema_version': 1, 'snapshot_id': str(generated), 'generated_at': generated,
                     'sources': sources, 'system': system, 'lanes': lanes, 'models': rows,
-                    'services': services,
+                    'services': services, 'apps': apps,
                     'diagnostics': diagnostics}
 
     def _services(self):
@@ -328,6 +329,42 @@ class MonitorAPI:
                          'host': row['host'], 'port': row['port'], 'endpoint': row['endpoint'],
                          'availability': {'state': state, 'reason': row.get('reason') or messages.get(state)}})
         return sorted(rows, key=lambda row: row['key'])
+
+    def _apps(self):
+        catalog = getattr(self.context, 'apps', None) or {}
+        rows = []
+        for spec in catalog.values():
+            state, reason = self._app_availability(spec)
+            rows.append({
+                'key': spec.key, 'alias': spec.alias, 'kind': spec.kind,
+                'endpoint': spec.endpoint, 'href': spec.endpoint,
+                'availability': {'state': state, 'reason': reason},
+            })
+        return sorted(rows, key=lambda row: row['key'])
+
+    def _app_availability(self, spec):
+        if spec.kind == 'knowledge':
+            from .apps import knowledge_upstream
+            from .discovery import tcp_connect_ok
+            parsed = urlsplit(knowledge_upstream(spec, self.context.settings))
+            host = parsed.hostname or '127.0.0.1'
+            port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+            if not tcp_connect_ok(host, port):
+                return 'unreachable', 'Backend could not be reached'
+            return 'healthy', None
+        if spec.kind == 'video':
+            from pathlib import Path
+            from .apps import video_home, video_root
+            from .video import resolve_archive_root
+            home = Path(video_home(spec, self.context.settings)).expanduser()
+            if not home.is_dir():
+                return 'unready', 'Video library directory is not available'
+            if not (home / 'catalog.db').is_file():
+                return 'unready', 'Video catalog is not available'
+            if not resolve_archive_root(str(home), video_root(spec, self.context.settings)):
+                return 'unready', 'Video repoRoot is not configured'
+            return 'healthy', None
+        return 'unknown', 'Availability has not been confirmed'
 
     def _models(self, specs, published, budgets):
         discovered = dict(published.get('models') or {})

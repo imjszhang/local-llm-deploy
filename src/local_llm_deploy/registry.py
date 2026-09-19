@@ -39,6 +39,9 @@ class Registry:
     def proxies(self, *, refresh=False):
         return normalize_registry(self.load_raw(refresh=refresh))[1]
 
+    def apps(self, *, refresh=False):
+        return normalize_registry(self.load_raw(refresh=refresh))[2]
+
     def update(self, operation):
         with file_lock(self.paths.registry.with_suffix(".json.lock")):
             raw = load_registry_document(self.paths.registry)
@@ -89,22 +92,26 @@ def main(argv=None, *, paths=None):
             registry.update(lambda raw: raw.pop(args.key))
             print(f"已删除注册项: {args.key}")
         elif args.cmd == "validate":
-            models, proxies = normalize_registry(registry.load_raw())
-            print(f"配置有效：{len(models)} 个模型，{len(proxies)} 个外部服务")
+            models, proxies, apps = normalize_registry(registry.load_raw())
+            print(f"配置有效：{len(models)} 个模型，{len(proxies)} 个外部服务，{len(apps)} 个应用")
         elif args.cmd == "list":
             for key, spec in registry.specs().items():
                 print(f"{key:28s} {','.join(spec.capabilities):10s} {spec.backend:24s} :{spec.port} {spec.alias}")
             for key, spec in registry.proxies().items():
                 print(f"{key:28s} {'proxy':10s} {'external_http':24s} :{spec.port} {spec.alias}")
+            for key, spec in registry.apps().items():
+                print(f"{key:28s} {'app':10s} {spec.kind:24s} {spec.endpoint} {spec.alias}")
         else:
             raw = registry.load_raw()
             if args.resolved:
-                models, proxies = normalize_registry(raw)
+                models, proxies, apps = normalize_registry(raw)
                 raw = {k: dict(s.raw, capabilities=list(s.capabilities), backend=s.backend,
                                management=s.management, endpoints=list(s.endpoints))
                        for k, s in models.items()}
                 raw.update({k: dict(s.raw, kind="proxy", prefix=s.prefix, host=s.host, port=s.port)
                             for k, s in proxies.items()})
+                raw.update({k: dict(s.raw, kind="app", app_kind=s.kind, prefix=s.prefix, endpoint=s.endpoint)
+                            for k, s in apps.items()})
             value = raw[args.key] if args.key else raw
             print(json.dumps(_redact(value), ensure_ascii=False, indent=2))
         return 0

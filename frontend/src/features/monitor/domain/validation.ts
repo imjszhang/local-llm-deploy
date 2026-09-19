@@ -1,5 +1,5 @@
 import type {
-  ChatControls, DataState, Diagnostic, Lane, LaneKey, ModelDetail, MonitorModel, MonitorService, PublicOverview,
+  ChatControls, DataState, Diagnostic, Lane, LaneKey, ModelDetail, MonitorApp, MonitorModel, MonitorService, PublicOverview,
   Section, Snapshot, SourceState, SystemData,
 } from '../api/types'
 
@@ -87,13 +87,23 @@ const service = (v: unknown): MonitorService => {
     availability: { state: oneOf(availability.state, ['healthy', 'unready', 'unauthorized', 'unreachable', 'unknown']), reason: nullableString(availability.reason) },
   }
 }
+const app = (v: unknown): MonitorApp => {
+  const o = object(v), availability = object(o.availability)
+  return {
+    key: string(o.key), alias: string(o.alias), kind: oneOf(o.kind, ['knowledge', 'video']),
+    endpoint: string(o.endpoint), href: string(o.href),
+    availability: { state: oneOf(availability.state, ['healthy', 'unready', 'unauthorized', 'unreachable', 'unknown']), reason: nullableString(availability.reason) },
+  }
+}
 export function parseSnapshot(value: unknown): Snapshot {
   const o = object(value), sources = object(o.sources), laneValues = object(o.lanes)
   if (o.schema_version !== 1) return fail()
   const models = array(o.models, model)
   const services = o.services === undefined ? [] : array(o.services, service)
+  const apps = o.apps === undefined ? [] : array(o.apps, app)
   if (new Set(models.map(m => m.key)).size !== models.length) return fail()
   if (new Set(services.map(item => item.key)).size !== services.length) return fail()
+  if (new Set(apps.map(item => item.key)).size !== apps.length) return fail()
   return {
     schema_version: 1, snapshot_id: string(o.snapshot_id), generated_at: number(o.generated_at),
     sources: { system: source(sources.system), catalog: source(sources.catalog), discovery: source(sources.discovery) },
@@ -101,6 +111,7 @@ export function parseSnapshot(value: unknown): Snapshot {
     lanes: Object.fromEntries(lanes.map(key => [key, lane(laneValues[key])])) as Record<LaneKey, Lane>,
     models,
     services,
+    apps,
     diagnostics: array(o.diagnostics, (v): Diagnostic => {
       const d = object(v)
       return { code: string(d.code), severity: oneOf(d.severity, ['info', 'warning', 'error']), message: string(d.message), model_key: nullableString(d.model_key) }

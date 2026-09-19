@@ -52,6 +52,14 @@ export interface MonitorService {
   endpoint: string
   availability: { state: 'healthy' | 'unready' | 'unauthorized' | 'unreachable' | 'unknown'; reason: string | null }
 }
+export interface MonitorApp {
+  key: string
+  alias: string
+  kind: 'knowledge' | 'video'
+  endpoint: string
+  href: string
+  availability: { state: 'healthy' | 'unready' | 'unauthorized' | 'unreachable' | 'unknown'; reason: string | null }
+}
 export interface Snapshot {
   schema_version: 1
   snapshot_id: string
@@ -61,6 +69,7 @@ export interface Snapshot {
   lanes: Record<LaneKey, Lane>
   models: MonitorModel[]
   services: MonitorService[]
+  apps: MonitorApp[]
   diagnostics: Diagnostic[]
 }
 export interface Metric { name: string; value: number | null; unit: string }

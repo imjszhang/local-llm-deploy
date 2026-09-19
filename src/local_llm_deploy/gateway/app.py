@@ -13,12 +13,14 @@ import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from local_llm_deploy.config import load_catalog, project_paths
+from local_llm_deploy.config import load_apps, load_catalog, project_paths
 from local_llm_deploy.observability import AccessLogger, log
+from .apps import (knowledge_backend_url, knowledge_timeout, knowledge_upstream,
+                   match_app, matches_prefix, rewrite_legacy, slash_redirect)
 from .auth import ApiAuth, BackendAuthError, ConsoleSessions, backend_credentials
 from .chat_store import ChatStore, MAX_BYTES as CHAT_MAX_BYTES, chat_target, parse_payload
 from .discovery import Discovery
-from .knowledge import is_knowledge_path, knowledge_backend_url, knowledge_redirect_location
+from .video import VideoApp
 from .proxies import (ProxyCatalog, is_service_path, parse_service_request, path_allowed,
                       service_backend_url)
 from .monitoring import Monitoring
@@ -32,7 +34,8 @@ from .transport import ResponseWriter, Transport, _client_disconnected
 class GatewayContext:
     def __init__(self, paths=None, *, settings=None, specs=None, proxies=None, discovery=None,
                  scheduler=None, transport=None, auth=None, monitoring=None,
-                 spec_loader=None, registry_ttl=30, clock=time.monotonic, monitor_api=None):
+                 spec_loader=None, registry_ttl=30, clock=time.monotonic, monitor_api=None,
+                 video=None, apps=None, app_loader=None):
         self.paths = paths or project_paths()
         self.settings = settings or GatewaySettings.from_env()
         # Registry refresh is atomic; runtime scheduling limits remain owned
@@ -44,12 +47,17 @@ class GatewayContext:
         self._spec_loader = spec_loader or (None if specs is not None else load_catalog)
         self._registry_ttl, self._clock = registry_ttl, clock
         self._loaded_at = clock()
+        self._video_injected = video is not None
         if specs is not None:
             self.specs = specs
             self.proxies = {} if proxies is None else proxies
+            self.apps = {} if apps is None else apps
+            self._app_loader = None
         else:
             loaded = self._spec_loader(self.paths.registry)
             self.specs, self.proxies = loaded if isinstance(loaded, tuple) else (loaded, {})
+            self._app_loader = app_loader or load_apps
+            self.apps = apps if apps is not None else self._app_loader(self.paths.registry)
         self.proxy_catalog = ProxyCatalog(self.proxies, ttl=self.settings.discovery_ttl, clock=clock)
         self.discovery = discovery or Discovery(self.paths, self.specs, self.settings)
         self.scheduler = scheduler or Scheduler(self.settings)
@@ -61,6 +69,8 @@ class GatewayContext:
         self.chat_store = ChatStore(self.paths)
         self.monitoring = monitoring or Monitoring(self.discovery, self.scheduler, self.settings)
         self.monitor_api = monitor_api or MonitorAPI(self)
+        self.video = video if video is not None else VideoApp.from_settings(
+            self.settings, next((item for item in self.apps.values() if item.kind == 'video'), None))
         self.logger = AccessLogger(self.settings.access_log, capture_bytes=self.settings.capture_bytes,
                                    log_body=self.settings.log_body)
 
@@ -105,6 +115,13 @@ class GatewayContext:
                     self.discovery.update_specs(candidate)
                 self.specs, self.router, self.proxies = candidate, router, candidate_proxies
                 self.proxy_catalog.update(candidate_proxies)
+                if self._app_loader is not None:
+                    self.apps = self._app_loader(self.paths.registry)
+                    if not self._video_injected:
+                        self.video = VideoApp.from_settings(
+                            self.settings,
+                            next((item for item in self.apps.values() if item.kind == 'video'), None),
+                        )
                 self._registry_success_at = int(time.time() * 1000)
                 self._registry_error = None
         finally:
@@ -185,9 +202,10 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 spec, _remainder = self._service_target(normalize_proxy_path(self.path))
                 self._content_length(spec.max_body_bytes)
                 return super().handle_expect_100()
-            path = urlsplit(self.path if is_knowledge_path(self.path) else normalize_proxy_path(self.path)).path
-            if is_knowledge_path(self.path) and self._known_console_authorization():
-                raise RoutingError(401, 'Console session does not authorize knowledge requests')
+            app, _mode = match_app(self.path, self.context.apps)
+            path = urlsplit(self.path if app is not None else normalize_proxy_path(self.path)).path
+            if app is not None and self._known_console_authorization():
+                raise RoutingError(401, f'Console session does not authorize {app.kind} requests')
             if path == '/console-api' or path.startswith('/console-api/'):
                 self._console_session_target(normalize_proxy_path(self.path))
             if path == '/chat-api' or path.startswith('/chat-api/'):
@@ -342,17 +360,33 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         self.connection.settimeout(ctx.settings.client_write_timeout)
         path = urlsplit(self.path).path
         try:
-            if is_knowledge_path(self.path):
+            app, mode = match_app(self.path, ctx.apps)
+            if app is not None:
                 if self._known_console_authorization():
-                    raise RoutingError(401, 'Console session does not authorize knowledge requests')
-                if path == '/knowledge':
-                    writer.start(301, {'Location': knowledge_redirect_location(self.path)})
+                    raise RoutingError(401, f'Console session does not authorize {app.kind} requests')
+                if mode == 'legacy':
+                    legacy = next(item for item in app.legacy_prefixes if matches_prefix(self.path, item))
+                    writer.start(301, {'Location': rewrite_legacy(self.path, legacy, app.prefix)})
                     writer.finish()
                     return
-                body = self._body()
-                ctx.transport.forward(self, writer, knowledge_backend_url(self.path, ctx.settings.knowledge_url),
-                                      self.command, body, dict(self.headers), timeout=ctx.settings.knowledge_timeout)
-                return
+                if path == app.prefix:
+                    writer.start(301, {'Location': slash_redirect(self.path, app.prefix)})
+                    writer.finish()
+                    return
+                if app.kind == 'knowledge':
+                    body = self._body()
+                    ctx.transport.forward(
+                        self, writer,
+                        knowledge_backend_url(self.path, knowledge_upstream(app, ctx.settings), app.prefix),
+                        self.command, body, dict(self.headers),
+                        timeout=knowledge_timeout(app, ctx.settings),
+                    )
+                    return
+                if app.kind == 'video':
+                    body = self._body()
+                    ctx.video.dispatch(self, writer, self.path, self.command, body, self.headers)
+                    return
+                raise RoutingError(404, f'Unsupported app kind: {app.kind}')
             if is_service_path(self.path):
                 self._dispatch_service(writer, normalize_proxy_path(self.path))
                 return

@@ -15,7 +15,9 @@
 
 仅 `GET/HEAD /api/models` 和 `/api/system` 作为明确的只读监控例外。监控页面支持在当前页面内存输入 Key；Key 不写入静态资源、URL 或浏览器持久存储。
 
-`/knowledge/` 保持独立凭据语义：转发知识库客户端 Authorization，不用模型 Key 覆盖。
+`type: app` 条目登记网关应用入口，与 `type: proxy` 的 `/services/<key>/` 分开。未登记的前缀不挂载。`/knowledge/` 保持独立凭据语义：转发知识库客户端 Authorization，不用模型 Key 覆盖。
+
+`/video/` 在网关进程内直接读写本机 `yt-study-archive`，不另开 HTTP 端口，也不占用模型 Key。浏览免认证；入队/重试使用视频库自己的 Bearer token。控制台 session 不能当视频库凭证。旧路径 `/archive/` 仅在 video 声明 `legacy_prefixes` 时 301 到 `/video/`。
 
 `/services/<key>/` 使用模型 API Key；默认不转发 `Authorization`（`auth.upstream=none`），控制台 session 不能当业务凭证。`Upgrade: websocket` 返回 501。未探活返回 503，未知键或未允许路径返回 404。这些键不出现在 `GET /v1/models`。
 
@@ -33,7 +35,8 @@
 | `POST /v1/audio/transcriptions` | multipart 音频转写 | asr |
 | `/api/<模型键>/*` | 按路径选择已注册后端 | 依端点校验 |
 | `/api/ollama/*` | Ollama 原生接口 | 原生推理也经过调度 |
-| `/knowledge/*` | 外部知识库反代 | 不属于模型 API |
+| `/knowledge/*` | `type: app` / `kind: knowledge`，外部知识库反代 | 不属于模型 API |
+| `/video/*` | `type: app` / `kind: video`，本机视频学习库 | 不属于模型 API |
 | `/services/<key>/*` | 登记为 `type: proxy` 的外部 HTTP 反代 | 不属于模型 API，不占 lane |
 
 Responses / Messages 仅在模型 `endpoints` 显式包含 `/v1/responses`、`/v1/messages` 时开放。网关提供透传与相应流式错误封装，实际模型后端必须支持对应协议。
@@ -44,7 +47,7 @@ Responses / Messages 仅在模型 `endpoints` 显式包含 `/v1/responses`、`/v
 
 | 接口（GET/HEAD） | 数据 |
 | --- | --- |
-| `/monitor-api/v1/snapshot` | 系统资源、全部注册及发现模型、可选 `services` 外部服务、网关通道和诊断 |
+| `/monitor-api/v1/snapshot` | 系统资源、全部注册及发现模型、可选 `services` 外部服务、独立 `apps` 应用入口、网关通道和诊断 |
 | `/monitor-api/v1/models/<编码后的模型键>` | 健康、指标、槽位、已确认归属的进程资源和 Ollama 信息 |
 | 同上，`?include_output=1` | 显式读取源端已有的有界调试输出；默认不包含正文 |
 

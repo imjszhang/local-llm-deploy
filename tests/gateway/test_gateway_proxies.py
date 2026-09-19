@@ -78,8 +78,10 @@ class ServiceProxyTests(unittest.TestCase):
         self_url = self.url
         settings = GatewaySettings(api_timeout=1, client_write_timeout=1, max_body_bytes=4096,
                                    knowledge_url=self.url + '/knowledge-backend')
+        from tests.gateway.app_fixtures import knowledge_app
         self.context = GatewayContext(ProjectPaths(self.root), settings=settings, specs=self.specs,
-                                      proxies={'tool': self.proxy}, discovery=FakeDiscovery())
+                                      proxies={'tool': self.proxy}, discovery=FakeDiscovery(),
+                                      apps=knowledge_app(settings.knowledge_url))
         self.context.proxy_catalog.probe = lambda *a, **k: True
         self.context.proxy_catalog.health = lambda *a, **k: True
         self.context.proxy_catalog.update({'tool': self.proxy})

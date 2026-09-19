@@ -77,6 +77,25 @@ class ProxySpec:
 
 
 @dataclass(frozen=True)
+class AppSpec:
+    key: str
+    alias: str
+    kind: str
+    prefix: str
+    legacy_prefixes: tuple[str, ...]
+    upstream: str
+    home: str
+    root: str
+    node: str
+    timeout: float | None
+    raw: dict[str, Any] = field(repr=False)
+
+    @property
+    def endpoint(self) -> str:
+        return self.prefix.rstrip("/") + "/"
+
+
+@dataclass(frozen=True)
 class ModelInstallation:
     model_key: str
     path: Path

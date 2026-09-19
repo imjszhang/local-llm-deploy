@@ -129,8 +129,11 @@ class RuntimeTests(unittest.TestCase):
                                         api_timeout=1, client_write_timeout=1,
                                         ollama_host=self.url, knowledge_url=self.url + '/knowledge-backend',
                                         max_body_bytes=4096, max_queue_depth=2)
+        from tests.gateway.app_fixtures import knowledge_app, merge_apps, video_app
         self.context = GatewayContext(ProjectPaths(self.root), settings=self.settings,
-                                      specs=self.specs, discovery=FakeDiscovery())
+                                      specs=self.specs, discovery=FakeDiscovery(),
+                                      apps=merge_apps(knowledge_app(self.settings.knowledge_url),
+                                                      video_app(self.root)))
         self.gateway = create_server(self.context, port=0)
         threading.Thread(target=self.gateway.serve_forever, daemon=True).start()
 

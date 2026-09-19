@@ -38,9 +38,10 @@ class ProxyRegistryTests(unittest.TestCase):
         self.assertNotIn("comfyui", specs)
 
     def test_normalize_registry_keeps_proxy_and_rejects_alias_clash(self):
-        models, proxies = normalize_registry({"chat": {"alias": "chat-alias"}, "comfyui": proxy_cfg()})
+        models, proxies, apps = normalize_registry({"chat": {"alias": "chat-alias"}, "comfyui": proxy_cfg()})
         self.assertEqual(set(models), {"chat"})
         self.assertEqual(set(proxies), {"comfyui"})
+        self.assertEqual(apps, {})
         self.assertEqual(proxies["comfyui"].prefix, "/services/comfyui")
         self.assertEqual(proxies["comfyui"].host, "192.168.0.20")
         self.assertEqual(proxies["comfyui"].port, 8188)

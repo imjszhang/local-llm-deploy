@@ -78,7 +78,8 @@ PID 仍位于 `run/<key>.pid`，前三行格式保持：
 | `/api/<model-key>/...` | 指定模型后端代理；保留路径形式，统一认证 |
 | 默认 `/api/...` | 显式默认模型代理；统一认证 |
 | `/api/ollama/...` | Ollama 兼容代理；推理和操作请求均认证 |
-| `/knowledge/` | 独立知识库反代；路径重写和客户端 Authorization 保留，不替换成模型 Key |
+| `/knowledge/` | `type: app` / `kind: knowledge`；路径重写和客户端 Authorization 保留，不替换成模型 Key。2026-09-19 起必须登记，未登记则 404 |
+| `/video/` | `type: app` / `kind: video`；网关内直接挂载，不另开 HTTP 端口，不用模型 Key。2026-09-19 起必须登记；`legacy_prefixes` 可将 `/archive/` 301 到 `/video/` |
 | `/services/<key>/` | `type: proxy` 外部 HTTP 反代；模型 API Key、默认剥 Authorization、禁止 WebSocket；不进入 `/v1/models` |
 | `/monitor.html` | 保留监控页面 URL；需要后端访问时由页面提供会话内 Key 输入 |
 

@@ -66,6 +66,21 @@ describe('monitor API boundary', () => {
     data.services.push({ ...data.services[0]! })
     expect(() => parseSnapshot(data)).toThrow('监控响应格式无效')
   })
+  it('defaults missing apps and keeps them apart from services', () => {
+    const data = sampleSnapshot()
+    const raw = { ...data } as { apps?: unknown }
+    delete raw.apps
+    expect(parseSnapshot(raw).apps).toEqual([])
+    data.apps = [{
+      key: 'knowledge', alias: '知识库', kind: 'knowledge',
+      endpoint: '/knowledge/', href: '/knowledge/',
+      availability: { state: 'healthy', reason: null },
+    }]
+    expect(parseSnapshot(data).apps).toEqual(data.apps)
+    expect(parseSnapshot(data).services.map(item => item.key)).not.toContain('knowledge')
+    data.apps.push({ ...data.apps[0]! })
+    expect(() => parseSnapshot(data)).toThrow('监控响应格式无效')
+  })
   it('sanitizes network and server errors without echoing secret data', async () => {
     const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new Error('Authorization: private-key; https://private-host'))
     const client = createMonitorClient(fetcher)

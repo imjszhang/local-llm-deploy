@@ -98,8 +98,10 @@ scheduler = Scheduler(settings)
 system = {'cpu': {'user': 0, 'sys': 2, 'idle': 98},
           'memory': {'total_gb': 64, 'used_gb': 12, 'free_gb': 52, 'wired_gb': 2}, 'load_avg': [1, 1, 1]}
 monitoring = Monitoring(discovery, scheduler, settings, collector=lambda running: dict(system))
+from tests.gateway.app_fixtures import knowledge_app
 context = GatewayContext(paths, specs=specs, discovery=discovery, settings=settings,
-                         scheduler=scheduler, monitoring=monitoring)
+                         scheduler=scheduler, monitoring=monitoring,
+                         apps=knowledge_app(settings.knowledge_url))
 if hasattr(context, 'monitor_api'):
     from local_llm_deploy.gateway.monitor_api import MonitorAPI
     context.monitor_api.close()

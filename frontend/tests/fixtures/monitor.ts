@@ -70,6 +70,15 @@ export function createSnapshot(now = Date.now()): Snapshot {
       host: '192.168.0.20', port: 8188, endpoint: '/services/comfyui/',
       availability: { state: 'healthy', reason: null },
     }],
+    apps: [{
+      key: 'knowledge', alias: '知识库', kind: 'knowledge',
+      endpoint: '/knowledge/', href: '/knowledge/',
+      availability: { state: 'healthy', reason: null },
+    }, {
+      key: 'video', alias: '视频库', kind: 'video',
+      endpoint: '/video/', href: '/video/',
+      availability: { state: 'healthy', reason: null },
+    }],
     diagnostics: [{ code: 'backend_unreachable', severity: 'warning', model_key: 'deepseek-v4', message: 'DeepSeek V4 Flash 暂不可用，其他模型可继续调用。' }],
   }
 }

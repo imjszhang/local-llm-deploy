@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 import math
+from pathlib import Path
 from typing import Mapping
 
 
@@ -15,7 +16,9 @@ GATEWAY_ENV_NAMES = frozenset({
     'CHAT_LANE_CONCURRENT', 'MAX_GLOBAL_CONCURRENT', 'EMBED_LANE_CONCURRENT',
     'RERANK_LANE_CONCURRENT', 'ASR_LANE_CONCURRENT', 'KV_CHARS_PER_TOKEN',
     'OLLAMA_HOST', 'OLLAMA_AUTO_DISCOVER', 'EXTERNAL_BACKEND_PROBE_TTL', 'OLLAMA_CACHE_TTL',
-    'KNOWLEDGE_COLLECTOR_URL', 'KNOWLEDGE_PROXY_TIMEOUT', 'MAX_REQUEST_BODY_BYTES',
+    'KNOWLEDGE_COLLECTOR_URL', 'KNOWLEDGE_PROXY_TIMEOUT',
+    'YT_ARCHIVE_HOME', 'YT_ARCHIVE_ROOT', 'YT_ARCHIVE_NODE',
+    'MAX_REQUEST_BODY_BYTES',
     'STREAM_BUFFER_CHUNKS', 'ACCESS_LOG_CAPTURE_BYTES', 'CANCEL_GRACE_SEC',
     'CLIENT_WRITE_TIMEOUT', 'SERVE_UI_ACCESS_LOG', 'SERVE_UI_LOG_BODY',
     'DEFAULT_CHAT_MODEL', 'DEFAULT_EMBEDDING_MODEL', 'DEFAULT_RERANK_MODEL', 'DEFAULT_ASR_MODEL',
@@ -42,6 +45,9 @@ class GatewaySettings:
     system_ttl: float = 3
     knowledge_url: str = 'http://127.0.0.1:18789/plugins/js-knowledge'
     knowledge_timeout: float = 30
+    archive_home: str = str(Path.home() / '.yt-study-archive')
+    archive_root: str = ''
+    archive_node: str = 'node'
     max_body_bytes: int = 64 * 1024 * 1024
     stream_buffer_chunks: int = 16
     capture_bytes: int = 65536
@@ -86,6 +92,9 @@ class GatewaySettings:
             ollama_ttl=number('OLLAMA_CACHE_TTL', 5),
             knowledge_url=env.get('KNOWLEDGE_COLLECTOR_URL', cls.knowledge_url).rstrip('/'),
             knowledge_timeout=number('KNOWLEDGE_PROXY_TIMEOUT', 30),
+            archive_home=env.get('YT_ARCHIVE_HOME', cls.archive_home),
+            archive_root=env.get('YT_ARCHIVE_ROOT', '').rstrip('/'),
+            archive_node=env.get('YT_ARCHIVE_NODE', 'node'),
             max_body_bytes=number('MAX_REQUEST_BODY_BYTES', 64 * 1024 * 1024, int),
             stream_buffer_chunks=number('STREAM_BUFFER_CHUNKS', 16, int),
             capture_bytes=number('ACCESS_LOG_CAPTURE_BYTES', 65536, int),

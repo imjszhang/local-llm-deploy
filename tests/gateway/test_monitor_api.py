@@ -138,6 +138,7 @@ class MonitorContractTests(MonitorFixture):
         rows = {m['key']: m for m in data['models']}
         self.assertEqual(data['schema_version'], 1)
         self.assertEqual(data['services'], [])
+        self.assertEqual(data['apps'], [])
         self.assertGreater(data['generated_at'], 1_000_000_000_000)
         self.assertEqual(set(data['lanes']), {'chat', 'embed', 'rerank', 'asr'})
         self.assertEqual(rows['offline']['lifecycle']['state'], 'unknown')
@@ -169,6 +170,22 @@ class MonitorContractTests(MonitorFixture):
         self.assertEqual(data['services'][0]['endpoint'], '/services/comfyui/')
         self.assertEqual(data['services'][0]['availability']['state'], 'healthy')
         self.assertNotIn('comfyui', {row['key'] for row in data['models']})
+
+    def test_snapshot_lists_apps_outside_services(self):
+        from tests.gateway.app_fixtures import knowledge_app, merge_apps, video_app
+        self.context.apps = merge_apps(
+            knowledge_app('http://127.0.0.1:9/collector'),
+            video_app(self.paths.root),
+        )
+        data = self.snapshot()
+        self.assertEqual(data['services'], [])
+        self.assertEqual({row['key'] for row in data['apps']}, {'knowledge', 'video'})
+        knowledge = next(row for row in data['apps'] if row['key'] == 'knowledge')
+        self.assertEqual(knowledge['kind'], 'knowledge')
+        self.assertEqual(knowledge['href'], '/knowledge/')
+        self.assertNotIn('upstream', knowledge)
+        self.assertNotIn('host', knowledge)
+        self.assertNotIn('knowledge', {row['key'] for row in data['models']})
 
     def test_uncertain_retains_reservation_and_blocks_route(self):
         ticket = self.context.scheduler.submit('chat', 'chat', tokens=30)

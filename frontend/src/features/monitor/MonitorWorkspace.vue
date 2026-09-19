@@ -7,6 +7,7 @@ import AccessDialog from "../../shared/components/AccessDialog.vue";
 import Sparkline from "./components/Sparkline.vue";
 import StatusBadge from "../../shared/components/StatusBadge.vue";
 import ModelTable from "./components/ModelTable.vue";
+import AppTable from "./components/AppTable.vue";
 import ServiceTable from "./components/ServiceTable.vue";
 import ModelDrawer from "./components/ModelDrawer.vue";
 import {
@@ -46,6 +47,7 @@ const system = computed(() =>
 );
 const models = computed(() => snapshot.value?.models || []);
 const services = computed(() => snapshot.value?.services || []);
+const apps = computed(() => snapshot.value?.apps || []);
 const selectedModel = computed(
   () => models.value.find((model) => model.key === selectedKey.value) || null,
 );
@@ -165,8 +167,12 @@ onBeforeUnmount(() => {
         ></a
       >
       <nav class="topbar-actions" aria-label="控制台导航">
-        <a class="knowledge-link" href="/knowledge/"
-          >知识库 <span aria-hidden="true">↗</span></a
+        <a
+          v-for="app in apps"
+          :key="app.key"
+          class="knowledge-link"
+          :href="app.href"
+          >{{ app.alias }} <span aria-hidden="true">↗</span></a
         ><a
           v-for="service in services"
           :key="service.key"
@@ -511,7 +517,8 @@ onBeforeUnmount(() => {
         </button>
       </section>
 
-      <ServiceTable :services="services" />
+      <AppTable v-if="apps.length" :apps="apps" />
+      <ServiceTable v-if="services.length" :services="services" />
       <ModelTable
         :models="models"
         :loading="loading"

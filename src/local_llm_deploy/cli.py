@@ -11,7 +11,7 @@ import sys
 import urllib.error
 import urllib.request
 
-from .config import ConfigError, load_catalog, load_proxies, load_specs, normalize_models, project_paths
+from .config import ConfigError, load_apps, load_catalog, load_proxies, load_specs, normalize_models, project_paths
 from .backends import build_ds4, build_gateway, build_service
 from .backends.builders import launchd_settings
 from .lifecycle import launchd
@@ -369,6 +369,7 @@ def main(argv=None):
             sub.add_argument("--json", action="store_true")
             opts = sub.parse_args(args)
             models, proxies = load_catalog(paths.registry)
+            apps = load_apps(paths.registry)
             observations = observe_instances(paths, models)
             rows = [{"key": key, "alias": model.alias, "backend": model.backend, "capabilities": list(model.capabilities),
                      "port": model.port, "management": model.management, "kind": "model",
@@ -378,8 +379,11 @@ def main(argv=None):
                          "port": spec.port, "management": "external", "kind": "proxy",
                          "status": "external", "upstream": spec.upstream, "endpoint": spec.prefix + "/"}
                         for key, spec in proxies.items()]
+            applications = [{"key": key, "alias": spec.alias, "kind": "app", "app_kind": spec.kind,
+                             "endpoint": spec.endpoint, "status": "registered"}
+                            for key, spec in apps.items()]
             if opts.json:
-                print(json.dumps([*rows, *services], ensure_ascii=False, indent=2))
+                print(json.dumps([*rows, *services, *applications], ensure_ascii=False, indent=2))
             else:
                 for row in rows:
                     print(f"{row['key']:24s} {row['backend']:24s} :{row['port']} {row['status']}  alias={row['alias']}")
@@ -387,6 +391,10 @@ def main(argv=None):
                     print("外部服务:")
                     for row in services:
                         print(f"{row['key']:24s} {'proxy':24s} :{row['port']} {row['status']}  alias={row['alias']}  {row['endpoint']}")
+                if applications:
+                    print("应用:")
+                    for row in applications:
+                        print(f"{row['key']:24s} {row['app_kind']:24s} {row['endpoint']}  alias={row['alias']}")
             return 0
         if cmd == "status":
             return _status(paths, args)
@@ -433,8 +441,9 @@ def main(argv=None):
             sub.add_argument("--resolved", action="store_true")
             opts = sub.parse_args(args)
             models, proxies = load_catalog(paths.registry)
+            apps = load_apps(paths.registry)
             if opts.operation == "validate":
-                print(f"配置有效: {len(models)} 个模型，{len(proxies)} 个外部服务")
+                print(f"配置有效: {len(models)} 个模型，{len(proxies)} 个外部服务，{len(apps)} 个应用")
             else:
                 content = {key: {"alias": model.alias, "backend": model.backend, "capabilities": model.capabilities,
                                  "management": model.management, "port": model.port, "host": model.host}
@@ -443,8 +452,12 @@ def main(argv=None):
                     content.update({key: {"kind": "proxy", "alias": spec.alias, "upstream": spec.upstream,
                                           "prefix": spec.prefix, "host": spec.host, "port": spec.port}
                                     for key, spec in proxies.items()})
+                    content.update({key: {"kind": "app", "app_kind": spec.kind, "alias": spec.alias,
+                                          "prefix": spec.prefix, "endpoint": spec.endpoint}
+                                    for key, spec in apps.items()})
                 else:
                     content.update({key: spec.raw for key, spec in proxies.items()})
+                    content.update({key: spec.raw for key, spec in apps.items()})
                 print(json.dumps(_redact(content), ensure_ascii=False, indent=2))
             return 0
         parser.error(f"未实现命令: {cmd}")

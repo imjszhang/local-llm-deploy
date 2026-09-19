@@ -170,6 +170,7 @@ class ConsoleHTTPTests(unittest.TestCase):
         token = self.issue()
         headers = {**self.local_headers, 'Authorization': 'Bearer ' + token}
         for path in ('/v1/models', '/api/chat/health', '/api/ollama/api/tags', '/knowledge/items',
+                     '/video/api/v1/health.json', '/archive/api/v1/health.json',
                      '/services/unknown/system_stats'):
             self.assertEqual(self.request(path, headers=headers)[0], 401, path)
         for path in ('/v1/embeddings', '/api/chat/v1/chat/completions', '/v1/responses'):

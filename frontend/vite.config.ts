@@ -11,7 +11,7 @@ export default defineConfig({
     rolldownOptions: { input: 'monitor.html' },
   },
   server: {
-    proxy: Object.fromEntries(['/monitor-api', '/api', '/v1', '/knowledge'].map(path => [path, {
+    proxy: Object.fromEntries(['/monitor-api', '/api', '/v1', '/knowledge', '/video'].map(path => [path, {
       target: 'http://127.0.0.1:8888', changeOrigin: false,
     }])),
   },

@@ -80,8 +80,10 @@ class GatewayContractTests(unittest.TestCase):
             def ollama_status(self):
                 return {'status': 'offline'}
         settings = GatewaySettings(knowledge_url=f'http://127.0.0.1:{self.port}/collector')
+        from tests.gateway.app_fixtures import knowledge_app
         self.context = GatewayContext(ProjectPaths(self.root), specs=specs,
-                                      discovery=FakeDiscovery(), settings=settings)
+                                      discovery=FakeDiscovery(), settings=settings,
+                                      apps=knowledge_app(settings.knowledge_url))
         server = create_server(self.context, port=0)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server

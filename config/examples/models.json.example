@@ -150,5 +150,18 @@
       "console": false
     },
     "websocket": false
+  },
+  "knowledge": {
+    "type": "app",
+    "kind": "knowledge",
+    "alias": "知识库",
+    "upstream": "http://127.0.0.1:18789/plugins/js-knowledge"
+  },
+  "video": {
+    "type": "app",
+    "kind": "video",
+    "alias": "视频库",
+    "home": "~/.yt-study-archive",
+    "legacy_prefixes": ["/archive"]
   }
 }

@@ -14,7 +14,7 @@ export function sampleSnapshot(time = Date.now()): Snapshot {
     sources: { system: sampleSource(time), discovery: sampleSource(time), catalog: sampleSource(time) },
     system: { cpu: { user: 20, sys: 5, idle: 75 }, memory: { total_gb: 64, used_gb: 20, free_gb: 44, wired_gb: 3, cache_gb: 8 }, load_avg: [1, 2, 3] },
     lanes: { chat: { ...lane }, embed: { ...lane }, rerank: { ...lane }, asr: { ...lane } },
-    models: [sampleModel('chat'), sampleModel('other')], services: [], diagnostics: [] }
+    models: [sampleModel('chat'), sampleModel('other')], services: [], apps: [], diagnostics: [] }
 }
 export function sampleDetail(key = 'chat', time = Date.now()): ModelDetail {
   const section = { state: 'ready' as const, message: null }

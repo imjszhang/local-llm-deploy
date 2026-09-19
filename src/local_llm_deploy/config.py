@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
-from .domain import ModelSpec, ProxySpec
+from .domain import AppSpec, ModelSpec, ProxySpec
 
 
 class ConfigError(ValueError):
@@ -270,6 +270,79 @@ def normalize_proxy(key: str, value: Any) -> ProxySpec:
     )
 
 
+APP_KINDS = ("knowledge", "video")
+DEFAULT_APP_PREFIXES = {"knowledge": "/knowledge", "video": "/video"}
+RESERVED_APP_PREFIXES = (
+    "/services", "/v1", "/api", "/monitor-api", "/console-api", "/chat-api",
+)
+
+
+def _app_prefix(key: str, field: str, value: Any) -> str:
+    path = _service_path(key, field, value).rstrip("/")
+    if path in ("", "/"):
+        raise ConfigError(f"{key}: {field} 不能是根路径")
+    for reserved in RESERVED_APP_PREFIXES:
+        if path == reserved or path.startswith(reserved + "/"):
+            raise ConfigError(f"{key}: {field} 不能占用 {reserved}")
+    return path
+
+
+def _prefixes_overlap(left: str, right: str) -> bool:
+    return left == right or left.startswith(right + "/") or right.startswith(left + "/")
+
+
+def normalize_app(key: str, value: Any) -> AppSpec:
+    if not isinstance(value, dict):
+        raise ConfigError(f"{key}: 应用配置必须是对象")
+    cfg = copy.deepcopy(value)
+    if cfg.get("type") != "app":
+        raise ConfigError(f"{key}: 不是 app 条目")
+    kind = cfg.get("kind")
+    if kind not in APP_KINDS:
+        raise ConfigError(f"{key}: kind 必须是 knowledge 或 video")
+    alias = cfg.get("alias") or key
+    if not isinstance(alias, str) or not alias or any(c in alias for c in ("\n", "\r", "\x00")):
+        raise ConfigError(f"{key}: alias 必须是非空字符串")
+    prefix = _app_prefix(key, "prefix", cfg.get("prefix") or DEFAULT_APP_PREFIXES[kind])
+    raw_legacy = cfg.get("legacy_prefixes", [])
+    if raw_legacy is None:
+        raw_legacy = []
+    if not isinstance(raw_legacy, list) or any(not isinstance(item, str) for item in raw_legacy):
+        raise ConfigError(f"{key}: legacy_prefixes 必须是字符串列表")
+    legacy = tuple(_app_prefix(key, "legacy_prefixes", item) for item in raw_legacy)
+    if len(set(legacy)) != len(legacy):
+        raise ConfigError(f"{key}: legacy_prefixes 不能重复")
+    if any(_prefixes_overlap(prefix, item) for item in legacy):
+        raise ConfigError(f"{key}: legacy_prefixes 不能与 prefix 重叠")
+    upstream = ""
+    if kind == "knowledge":
+        upstream = _absolute_http_url(key, "upstream", cfg.get("upstream"))
+    elif cfg.get("upstream") not in (None, ""):
+        raise ConfigError(f"{key}: video 不能声明 upstream")
+    timeout = cfg.get("timeout")
+    if timeout is not None and (not _finite_number(timeout) or timeout <= 0):
+        raise ConfigError(f"{key}: timeout 必须是有限正数")
+    for field in ("home", "root", "node"):
+        if field in cfg and cfg[field] not in (None, ""):
+            _string_value(key, field, cfg[field], nonempty=True, controls=True)
+        if kind == "knowledge" and cfg.get(field):
+            raise ConfigError(f"{key}: knowledge 不能声明 {field}")
+    cfg["type"] = "app"
+    cfg["kind"] = kind
+    cfg["alias"] = alias
+    cfg["prefix"] = prefix
+    cfg["legacy_prefixes"] = list(legacy)
+    if kind == "knowledge":
+        cfg["upstream"] = upstream
+        if timeout is not None:
+            cfg["timeout"] = float(timeout)
+    return AppSpec(
+        key, alias, kind, prefix, legacy, upstream,
+        str(cfg.get("home") or ""), str(cfg.get("root") or ""), str(cfg.get("node") or ""),
+        None if timeout is None else float(timeout), cfg,
+    )
+
+
 def normalize_models(raw: Any) -> dict[str, ModelSpec]:
     data = sanitize_top_level(raw)
     result: dict[str, ModelSpec] = {}
@@ -282,7 +355,7 @@ def normalize_models(raw: Any) -> dict[str, ModelSpec]:
         key = _registry_key(key)
         if not isinstance(value, dict):
             raise ConfigError(f"{key}: 模型配置必须是对象")
-        if value.get("type") == "proxy":
+        if value.get("type") in ("proxy", "app"):
             continue
         cfg = copy.deepcopy(value)
         _validate_known_fields(key, cfg)
@@ -364,32 +437,60 @@ def normalize_models(raw: Any) -> dict[str, ModelSpec]:
     return result
 
 
-def normalize_registry(raw: Any) -> tuple[dict[str, ModelSpec], dict[str, ProxySpec]]:
+def normalize_registry(raw: Any) -> tuple[dict[str, ModelSpec], dict[str, ProxySpec], dict[str, AppSpec]]:
     data = sanitize_top_level(raw)
     proxies: dict[str, ProxySpec] = {}
+    apps: dict[str, AppSpec] = {}
     names: dict[str, str] = {}
+    kinds: dict[str, str] = {}
+    owned: list[tuple[str, str]] = []
     for key, value in data.items():
         key = _registry_key(key)
-        if isinstance(value, dict) and value.get("type") == "proxy":
+        if not isinstance(value, dict):
+            continue
+        if value.get("type") == "proxy":
             spec = normalize_proxy(key, value)
             for name in dict.fromkeys((spec.key, spec.alias)):
                 if name in names and names[name] != key:
                     raise ConfigError(f"模型别名冲突: {name!r} ({names[name]}, {key})")
                 names[name] = key
             proxies[key] = spec
+        elif value.get("type") == "app":
+            spec = normalize_app(key, value)
+            if spec.kind in kinds:
+                raise ConfigError(f"{key}: kind {spec.kind!r} 已由 {kinds[spec.kind]} 注册")
+            kinds[spec.kind] = key
+            for name in dict.fromkeys((spec.key, spec.alias)):
+                if name in names and names[name] != key:
+                    raise ConfigError(f"模型别名冲突: {name!r} ({names[name]}, {key})")
+                names[name] = key
+            for prefix in (spec.prefix, *spec.legacy_prefixes):
+                for other_key, other in owned:
+                    if _prefixes_overlap(prefix, other):
+                        raise ConfigError(f"{key}: 路径 {prefix} 与 {other_key} 的 {other} 冲突")
+                owned.append((key, prefix))
+            apps[key] = spec
     models = normalize_models(raw)
     for spec in models.values():
         for name in dict.fromkeys((spec.key, spec.alias, spec.backend_model)):
             if name in names and names[name] != spec.key:
                 raise ConfigError(f"模型别名冲突: {name!r} ({names[name]}, {spec.key})")
             names[name] = spec.key
-    return models, proxies
+    return models, proxies, apps
 
 
 def dump_registry(raw: Any) -> dict[str, Any]:
-    models, proxies = normalize_registry(raw)
+    models, proxies, apps = normalize_registry(raw)
     data = sanitize_top_level(raw)
-    return {key: (proxies[key].raw if key in proxies else models[key].raw) for key in data}
+    dumped = {}
+    for key in data:
+        if key in proxies:
+            dumped[key] = proxies[key].raw
+        elif key in apps:
+            dumped[key] = apps[key].raw
+        else:
+            dumped[key] = models[key].raw
+    return dumped
 
 
 def _read_registry_json(path: str | Path | None = None) -> Any:
@@ -405,7 +506,8 @@ def load_registry_document(path: str | Path | None = None) -> dict[str, Any]:
 
 
 def load_catalog(path: str | Path | None = None) -> tuple[dict[str, ModelSpec], dict[str, ProxySpec]]:
-    return normalize_registry(_read_registry_json(path))
+    models, proxies, _apps = normalize_registry(_read_registry_json(path))
+    return models, proxies
 
 
 def load_models(path: str | Path | None = None) -> dict[str, Any]:
@@ -421,6 +523,11 @@ def load_specs(path: str | Path | None = None) -> dict[str, ModelSpec]:
 def load_proxies(path: str | Path | None = None) -> dict[str, ProxySpec]:
     _models, proxies = load_catalog(path)
     return proxies
+
+
+def load_apps(path: str | Path | None = None) -> dict[str, AppSpec]:
+    _models, _proxies, apps = normalize_registry(_read_registry_json(path))
+    return apps
 
 
 def load_env_file(path: Path, env: Mapping[str, str] | None = None) -> dict[str, str]:

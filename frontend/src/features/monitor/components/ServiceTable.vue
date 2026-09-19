@@ -8,39 +8,17 @@ const props = defineProps<{
   services: MonitorService[];
 }>();
 
-interface ServiceCard {
-  key: string;
-  alias: string;
-  note: string;
-  href: string;
-  external: boolean;
-  endpoint: string;
-  symbol: string;
-  availability: MonitorService["availability"] | null;
-}
-
-const cards = computed<ServiceCard[]>(() => [
-  {
-    key: "knowledge",
-    alias: "知识库",
-    note: "独立知识库反代",
-    href: "/knowledge/",
-    external: false,
-    endpoint: "/knowledge/",
-    symbol: "K",
-    availability: null,
-  },
-  ...props.services.map((service) => ({
+const cards = computed(() =>
+  props.services.map((service) => ({
     key: service.key,
     alias: service.alias,
     note: `${service.host}:${service.port}`,
     href: service.upstream,
-    external: true,
     endpoint: service.endpoint,
     symbol: service.alias.slice(0, 1).toUpperCase(),
     availability: service.availability,
   })),
-]);
+);
 
 function tone(state: MonitorService["availability"]["state"]) {
   return state === "healthy"
@@ -58,7 +36,7 @@ function tone(state: MonitorService["availability"]["state"]) {
         <h2 id="services-title">关联服务</h2>
         <span class="count-badge">{{ cards.length }}</span>
       </div>
-      <span class="section-note">点击卡片打开页面；不进入对话模型列表</span>
+      <span class="section-note">点击卡片打开上游页面；不进入对话模型列表</span>
     </div>
     <div class="service-cards">
       <a
@@ -66,8 +44,8 @@ function tone(state: MonitorService["availability"]["state"]) {
         :key="card.key"
         class="service-card"
         :href="card.href"
-        :target="card.external ? '_blank' : undefined"
-        :rel="card.external ? 'noopener noreferrer' : undefined"
+        target="_blank"
+        rel="noopener noreferrer"
       >
         <span class="lane-symbol" aria-hidden="true">{{ card.symbol }}</span>
         <div class="service-card-copy">
@@ -77,7 +55,6 @@ function tone(state: MonitorService["availability"]["state"]) {
         </div>
         <div class="service-card-meta">
           <StatusBadge
-            v-if="card.availability"
             :tone="tone(card.availability.state)"
             >{{
               availabilityLabels[card.availability.state] ||
