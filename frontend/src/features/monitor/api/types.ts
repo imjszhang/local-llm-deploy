@@ -1,5 +1,5 @@
 /** Monitor API v1. All timestamps are Unix milliseconds; absent readings are null. */
-export type LaneKey = 'chat' | 'embed' | 'rerank' | 'asr'
+export type LaneKey = 'chat' | 'embed' | 'rerank' | 'asr' | 'tts'
 export type DataState = 'loading' | 'ready' | 'stale' | 'unauthorized' | 'unsupported' | 'error'
 export interface Issue { code: string; message: string }
 export interface SourceState {

@@ -17,6 +17,7 @@ ENDPOINTS = {
     '/v1/embeddings': ('embedding', None),
     '/v1/rerank': ('rerank', None),
     '/v1/audio/transcriptions': ('asr', None),
+    '/v1/audio/speech': ('tts', None),
 }
 NATIVE_OLLAMA = {
     '/api/chat': ('chat', 'ollama'),
@@ -183,6 +184,8 @@ class Router:
                 data = json_object(body)
                 requested = data.get('model')
                 stream = data.get('stream', protocol == 'ollama')
+            if capability == 'tts' and stream is not False:
+                raise RoutingError(400, 'Streaming audio is not supported')
             model = self.select(models, named or requested, capability, unavailable)
             if (native_ollama or endpoint in NATIVE_OLLAMA) and not model.ollama:
                 raise RoutingError(400, 'The selected model is not provided by Ollama')

@@ -115,6 +115,20 @@ def legacy_command_matches(identity: ProcessIdentity, paths, key: str, spec=None
                 except (OSError, ValueError, plistlib.InvalidFileException):
                     pass
         return bool(binary and command.startswith(str(binary) + " ") and " --port " in command)
+    if backend == "mlx_tts":
+        import shlex
+        try:
+            parts = shlex.split(command)
+        except ValueError:
+            return False
+        expected = str((spec.raw.get("runtime") or {}).get("python") or ".venv-tts/bin/python")
+        executable = Path(expected)
+        if not executable.is_absolute():
+            executable = paths.root / executable
+        return (bool(parts) and parts[0] == str(executable)
+                and parts[1:3] == ["-m", "local_llm_deploy.services.tts"]
+                and "--model-name" in parts
+                and parts[parts.index("--model-name") + 1:parts.index("--model-name") + 2] == [key])
     script = scripts.get(backend)
     if script:
         return (str(paths.root / script) in command and

@@ -73,7 +73,7 @@ class Scheduler:
         self.models = {}
         self.uncertain = {}
         self.limits = {'chat': settings.chat_concurrent, 'embed': settings.embed_concurrent,
-                       'rerank': settings.rerank_concurrent, 'asr': settings.asr_concurrent}
+                       'rerank': settings.rerank_concurrent, 'asr': settings.asr_concurrent, 'tts': settings.tts_concurrent}
 
     def register_models(self, specs):
         """Freeze existing budgets, adding new model limits only on first sight."""

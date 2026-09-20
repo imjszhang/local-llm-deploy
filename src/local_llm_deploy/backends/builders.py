@@ -42,6 +42,7 @@ def _python(paths, backend, runtime, env):
         "transformers_embedding": (".venv-embed", ".venv"),
         "mlx_rerank": (".venv-rerank", ".venv-embed", ".venv"),
         "mlx_whisper": (".venv-whisper", ".venv"),
+        "mlx_tts": (".venv-tts",),
         "gateway": (".venv",),
     }.get(backend, (".venv",))
     for name in candidates:
@@ -83,7 +84,7 @@ def build_service(model, paths, options=None, *, env=None, validate=True):
     backend = model.backend
     if model.management in ("external", "observe", "unmanaged") or backend in ("ollama", "external_http"):
         raise LifecycleError(f"{model.key} 由外部服务管理；仅支持查询和连接。{raw.get('startup_hint', '')}")
-    prefix = {"transformers_embedding": "JINA", "mlx_rerank": "JINA", "mlx_whisper": "WHISPER"}.get(backend, "")
+    prefix = {"transformers_embedding": "JINA", "mlx_rerank": "JINA", "mlx_whisper": "WHISPER", "mlx_tts": "TTS"}.get(backend, "")
     specific = {"transformers_embedding": "JINA_EMBED", "mlx_rerank": "JINA_RERANK"}.get(backend)
     port_env = ([f"{specific}_PORT"] if specific else []) + ([f"{prefix}_PORT"] if prefix else []) + ["PORT"]
     host_env = ([f"{specific}_HOST"] if specific else []) + ([f"{prefix}_HOST"] if prefix else []) + ["HOST"]
@@ -141,9 +142,10 @@ def build_service(model, paths, options=None, *, env=None, validate=True):
         service_env.update(LLAMA_SERVER_SLOTS_DEBUG="1", DYLD_LIBRARY_PATH=str(cpp / "build/bin") + (":" + env["DYLD_LIBRARY_PATH"] if env.get("DYLD_LIBRARY_PATH") else ""))
     else:
         scripts = {"transformers_embedding": "serve_embedding.py", "mlx_rerank": "serve_rerank.py", "mlx_whisper": "serve_whisper.py"}
-        if backend not in scripts:
+        if backend not in scripts and backend != "mlx_tts":
             raise LifecycleError(f"尚无启动适配器: {backend}")
-        argv = [_python(paths, backend, runtime, env), str(paths.root / scripts[backend]),
+        entry = ["-m", "local_llm_deploy.services.tts"] if backend == "mlx_tts" else [str(paths.root / scripts[backend])]
+        argv = [_python(paths, backend, runtime, env), *entry,
                 "--model-name", model.key, "--host", host, "--port", str(port)]
         # All services receive the same selected installation via a scoped environment value.
         service_env["LOCAL_LLM_MODEL_DIR"] = str(model_dir)
@@ -151,6 +153,8 @@ def build_service(model, paths, options=None, *, env=None, validate=True):
             service_env["API_KEY_FILE"] = str(key_file)
         if key:
             service_env["API_KEY"] = key
+        if backend == "mlx_tts":
+            service_env.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
         if backend == "mlx_whisper" and (paths.root / "tools/ffmpeg").is_file():
             service_env["PATH"] = str(paths.root / "tools") + os.pathsep + env.get("PATH", os.defpath)
     argv.extend(_extra_args(_option(options, "backend_args", []) or []))

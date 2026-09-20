@@ -349,7 +349,7 @@ def normalize_models(raw: Any) -> dict[str, ModelSpec]:
     names: dict[str, str] = {}
     defaults: dict[str, str] = {}
     legacy = {"chat": ("chat", "llama_cpp"), "embedding": ("embedding", "transformers_embedding"),
-              "rerank": ("rerank", "mlx_rerank"), "asr": ("asr", "mlx_whisper"),
+              "rerank": ("rerank", "mlx_rerank"), "asr": ("asr", "mlx_whisper"), "tts": ("tts", "mlx_tts"),
               "ollama": ("chat", "ollama"), "external": ("chat", "external_http")}
     for key, value in data.items():
         key = _registry_key(key)
@@ -367,7 +367,7 @@ def normalize_models(raw: Any) -> dict[str, ModelSpec]:
         if backend == "ollama" and cfg.get("chat_controls", {}).get("reasoning_budget"):
             raise ConfigError(f"{key}: Ollama chat_controls.reasoning_budget 必须为 false")
         caps = cfg.get("capabilities", [capability])
-        if not isinstance(caps, list) or not caps or any(c not in ("chat", "embedding", "rerank", "asr") for c in caps):
+        if not isinstance(caps, list) or not caps or any(c not in ("chat", "embedding", "rerank", "asr", "tts") for c in caps):
             raise ConfigError(f"{key}: capabilities 必须是有效能力列表")
         management = cfg.get("management") or ("external" if backend in ("ollama", "external_http") else "managed")
         if management not in ("managed", "external"):

@@ -1,0 +1,2 @@
+# Isolated Apple Silicon Python >=3.10 environment.
+-e .[tts]

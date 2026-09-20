@@ -1,0 +1,29 @@
+{
+  "qwen3-tts-1.7b-base": {
+    "type": "tts",
+    "backend": "mlx_tts",
+    "capabilities": [
+      "tts"
+    ],
+    "management": "managed",
+    "full_model_name": "Qwen3-TTS 1.7B Base (MLX)",
+    "download_source": "huggingface",
+    "repo_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
+    "repo_name": "mlx-community-Qwen3-TTS-12Hz-1.7B-Base-bf16",
+    "hf_revision": "a6eb4f68e4b056f1215157bb696209bc82a6db48",
+    "alias": "qwen3-tts",
+    "default_port": 8008,
+    "runtime": {
+      "python": ".venv-tts/bin/python",
+      "management": "launchd",
+      "ready_timeout": 300,
+      "run_at_load": false
+    },
+    "params": {
+      "max_concurrent": 1
+    },
+    "default_for": [
+      "tts"
+    ]
+  }
+}

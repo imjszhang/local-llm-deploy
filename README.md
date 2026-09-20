@@ -1,6 +1,6 @@
 # Local LLM Deploy
 
-本机多模型推理的部署管理与 API 网关。支持 llama.cpp、Ollama、Transformers Embedding、MLX Rerank 和 mlx-whisper；当前主要验证平台为 macOS / Apple Silicon。
+本机多模型推理的部署管理与 API 网关。支持 llama.cpp、Ollama、Transformers Embedding、MLX Rerank、mlx-whisper 和 Qwen3-TTS（MLX）；当前主要验证平台为 macOS / Apple Silicon。
 
 控制层使用 Python 标准库，不需要安装模型推理依赖。模型服务运行在各自的虚拟环境中。
 
@@ -57,7 +57,7 @@ curl http://localhost:8888/v1/chat/completions \
   -d '{"model":"<模型键或别名>","messages":[{"role":"user","content":"你好"}]}'
 ```
 
-网关提供 Chat、Embedding、Rerank 和 Whisper 路由。显式未知模型返回 404，离线模型返回 503。省略 `model` 时必须配置明确的默认模型；不存在默认配置时返回 400。
+网关提供 Chat、Embedding、Rerank、Whisper 和 TTS 路由。显式未知模型返回 404，离线模型返回 503。省略 `model` 时必须配置明确的默认模型；不存在默认配置时返回 400。
 
 同一模型可通过注册表 `default_for: ["chat"]` 或 `DEFAULT_CHAT_MODEL` 等环境变量成为默认模型。模型的能力和具体后端分别声明，新增同类模型通常只需要修改注册表。
 
@@ -103,6 +103,7 @@ docs/                 部署、开发、架构、升级与验收文档
 
 - [架构与模块职责](docs/architecture.md)
 - [部署与环境安装](docs/deployment.md)
+- [Qwen3-TTS 独立服务部署](docs/qwen3-tts-deployment.md)（统一入口 8888，模型服务 8008）
 - [API 与认证](docs/api-guide.md)
 - [开发和测试](docs/development.md)
 - [迁移说明](docs/migration.md)

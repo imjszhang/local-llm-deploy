@@ -30,6 +30,7 @@ export function createSnapshot(now = Date.now()): Snapshot {
       embed: { active: 1, max: 2, waiting: 0, queue_depth: 1 },
       rerank: { active: 0, max: 1, waiting: 0, queue_depth: 0 },
       asr: { active: 0, max: 1, waiting: 0, queue_depth: 0 },
+      tts: { active: 0, max: 1, waiting: 0, queue_depth: 0 },
     },
     models: [
       model('qwen3.8-27b', 'Qwen 3.8 · 27B', 'llama_cpp', ['chat'], {

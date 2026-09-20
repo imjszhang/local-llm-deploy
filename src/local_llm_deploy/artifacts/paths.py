@@ -122,6 +122,13 @@ def weights_complete(spec, path, quant=None):
     if spec.backend == "mlx_rerank":
         return (all((path / f).is_file() for f in ("model.safetensors", "projector.safetensors", "rerank.py"))
                 and _indexed_weights_complete(path))
+    if spec.backend == "mlx_tts":
+        required = ("config.json", "tokenizer_config.json", "vocab.json", "merges.txt",
+                    "speech_tokenizer/config.json", "speech_tokenizer/model.safetensors")
+        return (all((path / name).is_file() for name in required)
+                and bool(list(path.glob("*.safetensors")))
+                and _indexed_weights_complete(path)
+                and _indexed_weights_complete(path / "speech_tokenizer"))
     if spec.backend == "mlx_whisper":
         return ((path / "config.json").is_file()
                 and bool(list(path.glob("*.npz")) + list(path.glob("*.safetensors")))

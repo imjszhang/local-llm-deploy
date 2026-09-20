@@ -140,7 +140,7 @@ class MonitorContractTests(MonitorFixture):
         self.assertEqual(data['services'], [])
         self.assertEqual(data['apps'], [])
         self.assertGreater(data['generated_at'], 1_000_000_000_000)
-        self.assertEqual(set(data['lanes']), {'chat', 'embed', 'rerank', 'asr'})
+        self.assertEqual(set(data['lanes']), {'chat', 'embed', 'rerank', 'asr', 'tts'})
         self.assertEqual(rows['offline']['lifecycle']['state'], 'unknown')
         self.assertEqual(rows['stale']['lifecycle']['state'], 'stale')
         self.assertEqual(rows['chat']['availability']['state'], 'healthy')

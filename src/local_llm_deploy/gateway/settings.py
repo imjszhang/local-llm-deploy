@@ -14,14 +14,14 @@ GATEWAY_ENV_NAMES = frozenset({
     'API_PROXY_TIMEOUT', 'BACKEND_CONNECT_TIMEOUT', 'MONITOR_PROXY_TIMEOUT',
     'QUEUE_KEEPALIVE_SEC', 'QUEUE_TIMEOUT', 'MAX_QUEUE_DEPTH',
     'CHAT_LANE_CONCURRENT', 'MAX_GLOBAL_CONCURRENT', 'EMBED_LANE_CONCURRENT',
-    'RERANK_LANE_CONCURRENT', 'ASR_LANE_CONCURRENT', 'KV_CHARS_PER_TOKEN',
+    'RERANK_LANE_CONCURRENT', 'ASR_LANE_CONCURRENT', 'TTS_LANE_CONCURRENT', 'KV_CHARS_PER_TOKEN',
     'OLLAMA_HOST', 'OLLAMA_AUTO_DISCOVER', 'EXTERNAL_BACKEND_PROBE_TTL', 'OLLAMA_CACHE_TTL',
     'KNOWLEDGE_COLLECTOR_URL', 'KNOWLEDGE_PROXY_TIMEOUT',
     'YT_ARCHIVE_HOME', 'YT_ARCHIVE_ROOT', 'YT_ARCHIVE_NODE',
     'MAX_REQUEST_BODY_BYTES',
     'STREAM_BUFFER_CHUNKS', 'ACCESS_LOG_CAPTURE_BYTES', 'CANCEL_GRACE_SEC',
     'CLIENT_WRITE_TIMEOUT', 'SERVE_UI_ACCESS_LOG', 'SERVE_UI_LOG_BODY',
-    'DEFAULT_CHAT_MODEL', 'DEFAULT_EMBEDDING_MODEL', 'DEFAULT_RERANK_MODEL', 'DEFAULT_ASR_MODEL',
+    'DEFAULT_CHAT_MODEL', 'DEFAULT_EMBEDDING_MODEL', 'DEFAULT_RERANK_MODEL', 'DEFAULT_ASR_MODEL', 'DEFAULT_TTS_MODEL',
 })
 
 
@@ -37,6 +37,7 @@ class GatewaySettings:
     embed_concurrent: int = 2
     rerank_concurrent: int = 1
     asr_concurrent: int = 1
+    tts_concurrent: int = 1
     chars_per_token: float = 2.5
     ollama_host: str = 'http://localhost:11434'
     ollama_auto_discover: bool = True
@@ -60,7 +61,7 @@ class GatewaySettings:
     def __post_init__(self):
         for name in ('api_timeout', 'connect_timeout', 'monitor_timeout', 'keepalive', 'queue_timeout',
                      'max_queue_depth', 'chat_concurrent', 'embed_concurrent',
-                     'rerank_concurrent', 'asr_concurrent', 'chars_per_token',
+                     'rerank_concurrent', 'asr_concurrent', 'tts_concurrent', 'chars_per_token',
                      'stream_buffer_chunks', 'max_body_bytes', 'cancel_grace', 'client_write_timeout'):
             if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f'{name} must be positive')
@@ -85,6 +86,7 @@ class GatewaySettings:
             embed_concurrent=number('EMBED_LANE_CONCURRENT', 2, int),
             rerank_concurrent=number('RERANK_LANE_CONCURRENT', 1, int),
             asr_concurrent=number('ASR_LANE_CONCURRENT', 1, int),
+            tts_concurrent=number('TTS_LANE_CONCURRENT', 1, int),
             chars_per_token=number('KV_CHARS_PER_TOKEN', 2.5),
             ollama_host=env.get('OLLAMA_HOST', 'http://localhost:11434').rstrip('/'),
             ollama_auto_discover=flag('OLLAMA_AUTO_DISCOVER'),
@@ -103,5 +105,5 @@ class GatewaySettings:
             access_log=env.get('SERVE_UI_ACCESS_LOG') or None,
             log_body=flag('SERVE_UI_LOG_BODY', False),
             defaults={cap: env[f'DEFAULT_{cap.upper()}_MODEL'] for cap in
-                      ('chat', 'embedding', 'rerank', 'asr') if env.get(f'DEFAULT_{cap.upper()}_MODEL')},
+                      ('chat', 'embedding', 'rerank', 'asr', 'tts') if env.get(f'DEFAULT_{cap.upper()}_MODEL')},
         )

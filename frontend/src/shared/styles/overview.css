@@ -152,7 +152,7 @@
 }
 .lanes-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
   margin: 14px 0 28px;
 }
@@ -243,3 +243,6 @@
   background: #5b9e85;
   transition: width 0.2s;
 }
+
+.lane-symbol--tts,
+.model-monogram--tts { color: #d1a2a8; background: #302329; border-color: #49333d; }

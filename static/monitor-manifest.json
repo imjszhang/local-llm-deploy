@@ -3,8 +3,8 @@
   "entry": "monitor.html",
   "files": [
     {
-      "path": "monitor-assets/ChatWorkspace-C4UkpHe4.js",
-      "sha256": "30ec51c54d74e0c647a12e508dc3a75228143a0cd62d8bbfaa200e7bc086e137",
+      "path": "monitor-assets/ChatWorkspace-4vzkVK9m.js",
+      "sha256": "a404381b0b295c74cff2edcf956d447788a3cbb1544e68926ec109cccafc8cb3",
       "bytes": 181721,
       "gzip_bytes": 69608
     },
@@ -15,10 +15,16 @@
       "gzip_bytes": 4314
     },
     {
-      "path": "monitor-assets/monitor-BiNW-dMl.css",
-      "sha256": "565fd30a4a2a34efa45bb40b96b91c111e427b3437ac9719436692e040e6b1f4",
-      "bytes": 36864,
-      "gzip_bytes": 8524
+      "path": "monitor-assets/monitor-0LTW0Ng-.js",
+      "sha256": "5c1aafedcb8fd96d4d2b69cd62d946d5f23825f6926ad73109ce6d55dff98eb3",
+      "bytes": 133804,
+      "gzip_bytes": 48518
+    },
+    {
+      "path": "monitor-assets/monitor-B1lTIgQe.css",
+      "sha256": "6eb12f2b7997bf13bb508f1da18e5c23c261f48432679f45e6f37f38065f5dfd",
+      "bytes": 36957,
+      "gzip_bytes": 8555
     },
     {
       "path": "monitor-assets/monitor-icon-DHaTF3UT.svg",
@@ -27,20 +33,14 @@
       "gzip_bytes": 167
     },
     {
-      "path": "monitor-assets/monitor-xQRsx0Fo.js",
-      "sha256": "738bde8903abb74fa9e15a804f6469a2d43cf7ec53c4567da93fa10d3e13dd8a",
-      "bytes": 133695,
-      "gzip_bytes": 48471
-    },
-    {
       "path": "monitor.html",
-      "sha256": "bb9fc9efa81d647cb4f1fd9edd79f57b09b862ef5db83ccfbe8d435060bde618",
+      "sha256": "1a636290a99b30052a9eb6a89bf38fa5262c464843eda803c701908f153d6f72",
       "bytes": 723,
-      "gzip_bytes": 457
+      "gzip_bytes": 455
     }
   ],
   "gzip": {
-    "javascript": 118079,
-    "css": 12838
+    "javascript": 118126,
+    "css": 12869
   }
 }

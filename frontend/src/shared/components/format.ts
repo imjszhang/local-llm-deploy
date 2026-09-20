@@ -44,7 +44,8 @@ export const capabilityLabels: Record<string, string> = {
   embed: "向量",
   embedding: "向量",
   rerank: "重排",
-  asr: "语音",
+  asr: "转写",
+  tts: "语音合成",
   transcription: "语音",
 };
 export const backendLabels: Record<string, string> = {
@@ -61,6 +62,7 @@ export const backendLabels: Record<string, string> = {
   transformers_embedding: "Transformers",
   mlx_rerank: "MLX Rerank",
   mlx_whisper: "MLX Whisper",
+  mlx_tts: "MLX TTS",
 };
 export const lifecycleLabels: Record<string, string> = {
   stopped: "未运行",

@@ -98,6 +98,7 @@ const laneMeta: {
   { key: "embed", label: "文本向量", english: "EMBED", symbol: "E" },
   { key: "rerank", label: "结果重排", english: "RERANK", symbol: "R" },
   { key: "asr", label: "语音转写", english: "ASR", symbol: "S" },
+  { key: "tts", label: "语音合成", english: "TTS", symbol: "T" },
 ];
 const statusLabel = computed(() =>
   paused.value

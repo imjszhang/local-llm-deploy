@@ -39,7 +39,7 @@ class ModelSpec:
             return tuple(explicit)
         routes = {"chat": ("/v1/chat/completions", "/v1/completions"),
                   "embedding": ("/v1/embeddings",), "rerank": ("/v1/rerank",),
-                  "asr": ("/v1/audio/transcriptions",)}
+                  "asr": ("/v1/audio/transcriptions",), "tts": ("/v1/audio/speech",)}
         return tuple(p for c in self.capabilities for p in routes[c])
 
 

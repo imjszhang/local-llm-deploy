@@ -33,6 +33,7 @@ const capabilitySymbols: Record<string, string> = {
   embedding: "E",
   rerank: "R",
   asr: "S",
+  tts: "T",
 };
 const search = ref("");
 const capability = ref("all");

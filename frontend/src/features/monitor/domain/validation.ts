@@ -21,7 +21,7 @@ const array = <T>(v: unknown, parse: (item: unknown) => T, limit = 5000): T[] =>
   Array.isArray(v) && v.length <= limit ? v.map(parse) : fail()
 const oneOf = <T extends string>(v: unknown, choices: readonly T[]): T =>
   typeof v === 'string' && choices.includes(v as T) ? v as T : fail()
-const lanes = ['chat', 'embed', 'rerank', 'asr'] as const
+const lanes = ['chat', 'embed', 'rerank', 'asr', 'tts'] as const
 const source = (v: unknown): SourceState => {
   const o = object(v)
   const error = o.error === null ? null : object(o.error)

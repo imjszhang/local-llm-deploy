@@ -36,10 +36,10 @@ class AccessLogger:
                   'method': method, 'model_name': model, 'kind': capability,
                   'elapsed_sec': round(elapsed, 4), 'status': status, 'outcome': outcome}
         # Payload logging remains explicit and bounded. Never record multipart audio.
-        if self.log_body and body and capability != 'asr':
+        if self.log_body and body and capability not in ('asr', 'tts'):
             record['body'] = body[:self.capture_bytes].decode('utf-8', errors='replace')
             record['body_truncated'] = len(body) > self.capture_bytes
-        if self.log_body and response is not None:
+        if self.log_body and response is not None and capability != 'tts':
             record['response_body'] = bytes(response.data).decode('utf-8', errors='replace')
             record['response_truncated'] = response.truncated
         try:

@@ -33,6 +33,7 @@
 | `POST /v1/embeddings` | 文本向量 | embedding |
 | `POST /v1/rerank` | 文档重排序，Jina 格式 | rerank |
 | `POST /v1/audio/transcriptions` | multipart 音频转写 | asr |
+| `POST /v1/audio/speech` | 参考音频克隆，JSON 输入 / WAV 输出 | tts |
 | `/api/<模型键>/*` | 按路径选择已注册后端 | 依端点校验 |
 | `/api/ollama/*` | Ollama 原生接口 | 原生推理也经过调度 |
 | `/knowledge/*` | `type: app` / `kind: knowledge`，外部知识库反代 | 不属于模型 API |
@@ -124,3 +125,7 @@ SSE 发送头前可返回 HTTP 错误；发送保活头后按对应协议返回�
 ## 会话历史 API
 
 `/chat-api/v1/sessions` 提供本机 SQLite 会话目录、读取、版本化写入和删除，见 [会话存储接口](chat-history.md#接口与维护)。历史 API 需要根 Key 精确匹配或本机控制台临时凭据，即使未配置根 Key 也不匿名开放。临时凭据仅新增这些限定 GET/PUT/DELETE 权限，不获得模型管理或其他代理权限。
+
+## TTS 语音合成
+
+`POST /v1/audio/speech` 接收 `model`、`input`、`ref_audio_base64`、`ref_text`、`language`、`response_format: "wav"`。字段约束和调用脚本见 [Qwen3-TTS 部署](qwen3-tts-deployment.md)。这是项目扩展，首版不支持音频流，`stream:true` 返回 400。默认模型按注册表 `default_for:["tts"]` 或 `DEFAULT_TTS_MODEL` 选择；独立 TTS lane 默认并发 1，可通过 `TTS_LANE_CONCURRENT` 设置。

@@ -500,7 +500,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             handed_off = True
             capture = ctx.transport.forward(self, writer, route.url, self.command, route.body, headers,
                                             ticket=ticket, stream=route.stream, protocol=route.protocol,
-                                            timeout=timeout, capture=bool(ctx.settings.access_log and ctx.settings.log_body))
+                                            timeout=timeout, capture=bool(ctx.settings.access_log and ctx.settings.log_body and route.capability != 'tts'))
         except QueueFull as exc:
             writer.start(429, {'Content-Type': 'application/json', 'Retry-After': '30'})
             writer.write(json.dumps({'error': {'message': str(exc), 'type': 'server_error'}}).encode())

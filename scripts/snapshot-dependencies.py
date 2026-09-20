@@ -9,7 +9,7 @@ import platform
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--extra", required=True, choices=("download", "embedding", "rerank", "whisper", "dev"))
+    parser.add_argument("--extra", required=True, choices=("download", "embedding", "rerank", "whisper", "tts", "dev"))
     args = parser.parse_args()
     try:
         from packaging.markers import default_environment
