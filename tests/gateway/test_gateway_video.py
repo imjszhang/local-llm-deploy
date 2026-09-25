@@ -198,6 +198,20 @@ class VideoGatewayTests(unittest.TestCase):
         status, _, _ = self.request('/video/api/v1/stats.json')
         self.assertEqual(status, 200)
 
+    def test_keyword_matches_transcript_json(self):
+        dest = self.home / 'library' / 'videos' / 'dQw4w9WgXcQ'
+        (dest / 'transcript.json').write_text(json.dumps({
+            'source': 'subs', 'lang': 'zh-Hans',
+            'segments': [{'start': 0, 'end': 1, 'text': '口播里的独特词'}],
+        }), encoding='utf-8')
+        status, payload, _ = self.request('/video/api/v1/videos.json?keyword=%E7%8B%AC%E7%89%B9%E8%AF%8D')
+        self.assertEqual(status, 200)
+        body = json.loads(payload)
+        self.assertEqual(body['totalItems'], 1)
+        self.assertEqual(body['data'][0]['videoId'], 'dQw4w9WgXcQ')
+        status, payload, _ = self.request('/video/api/v1/videos.json?keyword=%E6%B2%A1%E6%9C%89%E8%BF%99%E5%8F%A5')
+        self.assertEqual(json.loads(payload)['totalItems'], 0)
+
     def test_unregistered_video_is_not_mounted(self):
         self.context.apps = {}
         status, _, _ = self.request('/video/')

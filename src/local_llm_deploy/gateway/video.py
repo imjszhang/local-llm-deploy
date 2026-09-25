@@ -163,6 +163,26 @@ def _connect(catalog):
     return connection
 
 
+def _transcript_text(home, video_id):
+    path = Path(home) / 'library' / 'videos' / video_id / 'transcript.json'
+    if not path.is_file():
+        return ''
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return ''
+    segments = payload.get('segments') if isinstance(payload, dict) else None
+    if not isinstance(segments, list):
+        return ''
+    return '\n'.join(str(item.get('text') or '') for item in segments if isinstance(item, dict))
+
+
+def _search_blob(home, video):
+    parts = [str(video.get(key) or '') for key in ('title', 'channel', 'description', 'videoId', 'canonicalUrl')]
+    parts.append(_transcript_text(home, video['videoId']))
+    return '\n'.join(parts).lower()
+
+
 def list_videos(home, query):
     catalog = Path(home) / 'catalog.db'
     connection = _connect(catalog)
@@ -188,8 +208,7 @@ def list_videos(home, query):
             continue
         if channel and channel not in (video['channel'] or '').lower():
             continue
-        if keyword and not any(keyword in str(video.get(key) or '').lower()
-                               for key in ('title', 'channel', 'description', 'videoId', 'canonicalUrl')):
+        if keyword and keyword not in _search_blob(home, video):
             continue
         out.append(video)
     return out
