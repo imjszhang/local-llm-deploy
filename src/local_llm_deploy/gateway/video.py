@@ -119,7 +119,35 @@ def _row(row):
     }
 
 
-def public_video(video, *, detail=False):
+PLAYBACK = (
+    ('source', '原片', ''),
+    ('burn', '中文字幕', '.zh.burn.mp4'),
+    ('soft', '软字幕', '.zh.mp4'),
+)
+
+
+def sibling_name(video_path, suffix):
+    if not suffix:
+        return video_path
+    return f'{Path(video_path).stem}{suffix}'
+
+
+def playback_options(home, video):
+    if not home or not video or not video.get('videoPath'):
+        return []
+    dest = (Path(home) / 'library' / 'videos' / video['videoId']).resolve()
+    options = []
+    for ident, label, suffix in PLAYBACK:
+        relative = sibling_name(video['videoPath'], suffix)
+        absolute = (dest / relative).resolve()
+        if absolute != dest and not str(absolute).startswith(str(dest) + os.sep):
+            continue
+        if absolute.is_file():
+            options.append({'id': ident, 'label': label})
+    return options
+
+
+def public_video(video, *, detail=False, home=None):
     if not video:
         return None
     item = {
@@ -139,6 +167,7 @@ def public_video(video, *, detail=False):
         'canonicalUrl': video['canonicalUrl'],
         'hasMedia': bool(video.get('videoPath')),
         'hasThumb': bool(video.get('thumbPath')),
+        'playback': playback_options(home, video),
     }
     if detail:
         item.update({
@@ -259,8 +288,14 @@ def stats(home):
     return result
 
 
-def resolve_media(home, video, kind):
-    relative = video.get('thumbPath') if kind == 'thumb' else video.get('videoPath')
+def resolve_media(home, video, kind, variant='source'):
+    if kind == 'thumb':
+        relative = video.get('thumbPath')
+    else:
+        chosen = next((item for item in PLAYBACK if item[0] == (variant or 'source')), None)
+        if chosen is None or not video.get('videoPath'):
+            return None
+        relative = sibling_name(video['videoPath'], chosen[2])
     if not relative:
         return None
     dest = (Path(home) / 'library' / 'videos' / video['videoId']).resolve()
@@ -395,7 +430,7 @@ class VideoApp:
             _json(writer, 200, {
                 'status': 'ok', 'page': page, 'perPage': per_page,
                 'totalItems': total, 'totalPages': max(1, (total + per_page - 1) // per_page),
-                'data': [public_video(item) for item in videos[start:start + per_page]],
+                'data': [public_video(item, home=self.home) for item in videos[start:start + per_page]],
             })
             return
         if pathname == '/api/v1/videos.json' and method == 'POST':
@@ -430,7 +465,7 @@ class VideoApp:
             video = get_video(self.home, video_id)
             if not video:
                 raise RoutingError(404, f'Video not found: {video_id}')
-            _json(writer, 200, {'status': 'ok', 'video': public_video(video, detail=True)})
+            _json(writer, 200, {'status': 'ok', 'video': public_video(video, detail=True, home=self.home)})
             return
         retry = re.fullmatch(r'/api/v1/videos/([^/]+)/retry\.json', pathname)
         if retry and method == 'POST':
@@ -454,7 +489,10 @@ class VideoApp:
             video = get_video(self.home, video_id)
             if not video:
                 raise RoutingError(404, f'Video not found: {video_id}')
-            path = resolve_media(self.home, video, kind)
+            variant = query.get('variant') or 'source'
+            if variant not in ('source', 'burn', 'soft'):
+                raise RoutingError(400, 'Unknown media variant')
+            path = resolve_media(self.home, video, kind, variant)
             if path is None:
                 raise RoutingError(404, 'Thumbnail not found' if kind == 'thumb' else 'Media not found')
             _send_file(handler, writer, path, MIME.get(path.suffix.lower(), 'application/octet-stream'))
