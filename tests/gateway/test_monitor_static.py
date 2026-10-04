@@ -83,7 +83,8 @@ class MonitorStaticTests(unittest.TestCase):
                 if path == '/monitor.html':
                     self.assertEqual(body, expected)
                 else:
-                    self.assertIn(b'/monitor.html', body)
+                    self.assertIn('本地网关'.encode(), body)
+                    self.assertNotIn(b'http-equiv="refresh"', body)
                 status, head_headers, head_body = self.request(path, 'HEAD')
                 self.assertEqual(status, 200)
                 self.assertEqual(head_body, b'')
@@ -136,6 +137,29 @@ class MonitorStaticTests(unittest.TestCase):
         status, headers, _ = self.request('/monitor-assets/missing-00000000.js')
         self.assertEqual(status, 404)
         self.assertNotIn('immutable', headers.get('Cache-Control', ''))
+
+    def test_monitor_app_serves_console_and_legacy_url_redirects(self):
+        from local_llm_deploy.config import normalize_app
+        previous = self.context.apps
+        spec = normalize_app('monitor', {
+            'type': 'app', 'kind': 'monitor', 'alias': '运行监控', 'prefix': '/monitor',
+        })
+        self.context.apps = {**previous, 'monitor': spec}
+        try:
+            expected = (self.paths.static / 'monitor.html').read_bytes()
+            status, headers, _ = self.request('/monitor')
+            self.assertEqual(status, 301)
+            self.assertEqual(headers['Location'], '/monitor/')
+            status, headers, body = self.request('/monitor/')
+            self.assertEqual(status, 200)
+            self.assertEqual(body, expected)
+            self.assertEqual(headers['Cache-Control'], 'no-cache')
+            status, headers, body = self.request('/monitor.html?demo=1')
+            self.assertEqual(status, 301)
+            self.assertEqual(headers['Location'], '/monitor/?demo=1')
+            self.assertEqual(body, b'')
+        finally:
+            self.context.apps = previous
 
     def test_python_serves_publication_without_node_or_any_subprocess(self):
         parser = AssetReferences()

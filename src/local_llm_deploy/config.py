@@ -270,10 +270,11 @@ def normalize_proxy(key: str, value: Any) -> ProxySpec:
     )
 
 
-APP_KINDS = ("knowledge", "video")
-DEFAULT_APP_PREFIXES = {"knowledge": "/knowledge", "video": "/video"}
+APP_KINDS = ("knowledge", "video", "monitor", "http")
+SINGLETON_APP_KINDS = ("knowledge", "video", "monitor")
+DEFAULT_APP_PREFIXES = {"knowledge": "/knowledge", "video": "/video", "monitor": "/monitor"}
 RESERVED_APP_PREFIXES = (
-    "/services", "/v1", "/api", "/monitor-api", "/console-api", "/chat-api",
+    "/services", "/v1", "/api", "/monitor-api", "/console-api", "/chat-api", "/gateway-api",
 )
 
 
@@ -299,10 +300,12 @@ def normalize_app(key: str, value: Any) -> AppSpec:
         raise ConfigError(f"{key}: 不是 app 条目")
     kind = cfg.get("kind")
     if kind not in APP_KINDS:
-        raise ConfigError(f"{key}: kind 必须是 knowledge 或 video")
+        raise ConfigError(f"{key}: kind 必须是 knowledge、video、monitor 或 http")
     alias = cfg.get("alias") or key
     if not isinstance(alias, str) or not alias or any(c in alias for c in ("\n", "\r", "\x00")):
         raise ConfigError(f"{key}: alias 必须是非空字符串")
+    if kind == "http" and not cfg.get("prefix"):
+        raise ConfigError(f"{key}: http 应用必须声明 prefix")
     prefix = _app_prefix(key, "prefix", cfg.get("prefix") or DEFAULT_APP_PREFIXES[kind])
     raw_legacy = cfg.get("legacy_prefixes", [])
     if raw_legacy is None:
@@ -315,24 +318,24 @@ def normalize_app(key: str, value: Any) -> AppSpec:
     if any(_prefixes_overlap(prefix, item) for item in legacy):
         raise ConfigError(f"{key}: legacy_prefixes 不能与 prefix 重叠")
     upstream = ""
-    if kind == "knowledge":
+    if kind in ("knowledge", "http"):
         upstream = _absolute_http_url(key, "upstream", cfg.get("upstream"))
     elif cfg.get("upstream") not in (None, ""):
-        raise ConfigError(f"{key}: video 不能声明 upstream")
+        raise ConfigError(f"{key}: {kind} 不能声明 upstream")
     timeout = cfg.get("timeout")
     if timeout is not None and (not _finite_number(timeout) or timeout <= 0):
         raise ConfigError(f"{key}: timeout 必须是有限正数")
     for field in ("home", "root", "node"):
         if field in cfg and cfg[field] not in (None, ""):
             _string_value(key, field, cfg[field], nonempty=True, controls=True)
-        if kind == "knowledge" and cfg.get(field):
-            raise ConfigError(f"{key}: knowledge 不能声明 {field}")
+        if kind in ("knowledge", "http", "monitor") and cfg.get(field):
+            raise ConfigError(f"{key}: {kind} 不能声明 {field}")
     cfg["type"] = "app"
     cfg["kind"] = kind
     cfg["alias"] = alias
     cfg["prefix"] = prefix
     cfg["legacy_prefixes"] = list(legacy)
-    if kind == "knowledge":
+    if kind in ("knowledge", "http"):
         cfg["upstream"] = upstream
         if timeout is not None:
             cfg["timeout"] = float(timeout)
@@ -457,9 +460,10 @@ def normalize_registry(raw: Any) -> tuple[dict[str, ModelSpec], dict[str, ProxyS
             proxies[key] = spec
         elif value.get("type") == "app":
             spec = normalize_app(key, value)
-            if spec.kind in kinds:
-                raise ConfigError(f"{key}: kind {spec.kind!r} 已由 {kinds[spec.kind]} 注册")
-            kinds[spec.kind] = key
+            if spec.kind in SINGLETON_APP_KINDS:
+                if spec.kind in kinds:
+                    raise ConfigError(f"{key}: kind {spec.kind!r} 已由 {kinds[spec.kind]} 注册")
+                kinds[spec.kind] = key
             for name in dict.fromkeys((spec.key, spec.alias)):
                 if name in names and names[name] != key:
                     raise ConfigError(f"模型别名冲突: {name!r} ({names[name]}, {key})")

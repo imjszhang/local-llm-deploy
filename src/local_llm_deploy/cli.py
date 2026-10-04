@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 
 from .config import ConfigError, load_apps, load_catalog, load_proxies, load_specs, normalize_models, project_paths
+from .gateway.app_registry import AppRegistrationStore, load_registered_apps, registration_path
 from .backends import build_ds4, build_gateway, build_service
 from .backends.builders import launchd_settings
 from .lifecycle import launchd
@@ -20,7 +21,7 @@ from .lifecycle.observe import health_ready, observe_instances
 from .lifecycle.types import LifecycleError
 
 
-COMMANDS = ("list", "models", "registry", "download", "register", "remove", "start", "stop",
+COMMANDS = ("list", "models", "registry", "apps", "download", "register", "remove", "start", "stop",
             "status", "logs", "plan", "foreground", "daemon", "reconcile", "config", "engine",
             "deploy", "monitor", "compat", "run", "help")
 
@@ -380,10 +381,14 @@ def main(argv=None):
                          "status": "external", "upstream": spec.upstream, "endpoint": spec.prefix + "/"}
                         for key, spec in proxies.items()]
             applications = [{"key": key, "alias": spec.alias, "kind": "app", "app_kind": spec.kind,
-                             "endpoint": spec.endpoint, "status": "registered"}
+                             "endpoint": spec.endpoint, "status": "registered", "source": "models.json"}
                             for key, spec in apps.items()]
+            registered_rows = [{"key": key, "alias": spec.alias, "kind": "app", "app_kind": spec.kind,
+                                "endpoint": spec.endpoint, "upstream": spec.upstream,
+                                "status": "registered", "source": "self"}
+                               for key, spec in sorted(load_registered_apps(registration_path(paths.registry)).items())]
             if opts.json:
-                print(json.dumps([*rows, *services, *applications], ensure_ascii=False, indent=2))
+                print(json.dumps([*rows, *services, *applications, *registered_rows], ensure_ascii=False, indent=2))
             else:
                 for row in rows:
                     print(f"{row['key']:24s} {row['backend']:24s} :{row['port']} {row['status']}  alias={row['alias']}")
@@ -395,6 +400,29 @@ def main(argv=None):
                     print("应用:")
                     for row in applications:
                         print(f"{row['key']:24s} {row['app_kind']:24s} {row['endpoint']}  alias={row['alias']}")
+                if registered_rows:
+                    print("自行注册:")
+                    for row in registered_rows:
+                        print(f"{row['key']:24s} {row['app_kind']:24s} {row['endpoint']}  alias={row['alias']}  {row['upstream']}")
+            return 0
+        if cmd == "apps":
+            sub = _parser("apps")
+            nested = sub.add_subparsers(dest="cmd", required=True)
+            nested.add_parser("list")
+            remove = nested.add_parser("remove")
+            remove.add_argument("key")
+            opts = sub.parse_args(args)
+            store = AppRegistrationStore(paths.registry)
+            if opts.cmd == "list":
+                registered = store.list_registered()
+                if not registered:
+                    print("无自行注册的应用")
+                for key, spec in sorted(registered.items()):
+                    print(f"{key:24s} {spec.endpoint:16s} {spec.upstream}  alias={spec.alias}")
+                return 0
+            store.remove(opts.key)
+            print(f"已删除自行注册的应用: {opts.key}")
+            print("正在运行的网关会在下次注册表刷新时卸下该入口；也可重启 serve-ui")
             return 0
         if cmd == "status":
             return _status(paths, args)

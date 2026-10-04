@@ -13,10 +13,12 @@ import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from local_llm_deploy.config import load_apps, load_catalog, project_paths
+from local_llm_deploy.config import ConfigError, load_catalog, project_paths
 from local_llm_deploy.observability import AccessLogger, log
+from .app_registry import AppRegistrationStore, load_mounted_apps
 from .apps import (knowledge_backend_url, knowledge_timeout, knowledge_upstream,
                    match_app, matches_prefix, rewrite_legacy, slash_redirect)
+from .home import render_home
 from .auth import ApiAuth, BackendAuthError, ConsoleSessions, backend_credentials
 from .chat_store import ChatStore, MAX_BYTES as CHAT_MAX_BYTES, chat_target, parse_payload
 from .discovery import Discovery
@@ -56,7 +58,7 @@ class GatewayContext:
         else:
             loaded = self._spec_loader(self.paths.registry)
             self.specs, self.proxies = loaded if isinstance(loaded, tuple) else (loaded, {})
-            self._app_loader = app_loader or load_apps
+            self._app_loader = app_loader or load_mounted_apps
             self.apps = apps if apps is not None else self._app_loader(self.paths.registry)
         self.proxy_catalog = ProxyCatalog(self.proxies, ttl=self.settings.discovery_ttl, clock=clock)
         self.discovery = discovery or Discovery(self.paths, self.specs, self.settings)
@@ -126,6 +128,16 @@ class GatewayContext:
                 self._registry_error = None
         finally:
             self._refresh_lock.release()
+
+    def reload_apps(self):
+        if self._app_loader is None:
+            return
+        apps = self._app_loader(self.paths.registry)
+        with self._catalog_lock:
+            self.apps = apps
+            if not self._video_injected:
+                self.video = VideoApp.from_settings(
+                    self.settings, next((item for item in apps.values() if item.kind == 'video'), None))
 
     def resolve(self, path, method, body, headers):
         self.refresh()
@@ -210,7 +222,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 self._console_session_target(normalize_proxy_path(self.path))
             if path == '/chat-api' or path.startswith('/chat-api/'):
                 self._chat_request_target(normalize_proxy_path(self.path))
-            if (path.startswith(('/api/', '/v1/', '/monitor-api/')) or path == '/monitor-api') and path not in ('/api/models', '/api/system'):
+            if (path.startswith(('/api/', '/v1/', '/monitor-api/', '/gateway-api/')) or path in ('/monitor-api', '/gateway-api')) and path not in ('/api/models', '/api/system'):
                 if not self._authorized(path):
                     self.close_connection = True
                     writer.error(401, 'Invalid API key', code='invalid_request_error')
@@ -347,6 +359,61 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         ctx.transport.forward(self, writer, service_backend_url(spec, remainder),
                               self.command, body, self._service_headers(spec), timeout=timeout)
 
+    def _dispatch_registered_apps(self, writer, path):
+        if not self._authorized(path) or self._known_console_authorization():
+            raise RoutingError(401, 'Invalid API key', code='invalid_request_error')
+        store = AppRegistrationStore(self.context.paths.registry)
+        prefix = '/gateway-api/v1/apps'
+        try:
+            if path == prefix and self.command == 'GET':
+                rows = [{
+                    'key': spec.key, 'alias': spec.alias, 'kind': spec.kind,
+                    'prefix': spec.prefix, 'endpoint': spec.endpoint, 'upstream': spec.upstream,
+                } for spec in store.list_registered().values()]
+                self._json(writer, {'apps': sorted(rows, key=lambda row: row['key'])})
+                return
+            if path == prefix:
+                raise RoutingError(405, 'Method not allowed')
+            if not path.startswith(prefix + '/'):
+                raise RoutingError(404, 'Not found')
+            key = path[len(prefix) + 1:]
+            if '/' in key or not key:
+                raise RoutingError(404, 'Not found')
+            if self.command == 'PUT':
+                spec = store.register(key, parse_payload(self._body()))
+                self.context.reload_apps()
+                self._json(writer, {
+                    'key': spec.key, 'alias': spec.alias, 'kind': spec.kind,
+                    'prefix': spec.prefix, 'endpoint': spec.endpoint, 'upstream': spec.upstream,
+                })
+                return
+            if self.command == 'DELETE':
+                store.remove(key)
+                self.context.reload_apps()
+                self._json(writer, {'deleted': True, 'key': key})
+                return
+            raise RoutingError(405, 'Method not allowed')
+        except ConfigError as exc:
+            raise RoutingError(400, str(exc)) from None
+
+    def _serve_monitor_app(self, app):
+        remainder = urlsplit(self.path).path[len(app.prefix):] or '/'
+        if remainder not in ('/', '/index.html'):
+            raise RoutingError(404, 'Not found')
+        page = self.context.paths.static / 'monitor.html'
+        if not page.is_file():
+            raise RoutingError(404, 'Monitor page is not published')
+        self._send_document(page.read_bytes())
+
+    def _send_document(self, body):
+        self._static_cache_control = 'no-cache'
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        if self.command != 'HEAD':
+            self.wfile.write(body)
+
     def _json(self, writer, payload):
         writer.start(200, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'})
         writer.write(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode())
@@ -360,6 +427,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         self.connection.settimeout(ctx.settings.client_write_timeout)
         path = urlsplit(self.path).path
         try:
+            if path == '/gateway-api' or path.startswith('/gateway-api/'):
+                self._dispatch_registered_apps(writer, path)
+                return
             app, mode = match_app(self.path, ctx.apps)
             if app is not None:
                 if self._known_console_authorization():
@@ -382,9 +452,21 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                         timeout=knowledge_timeout(app, ctx.settings),
                     )
                     return
+                if app.kind == 'http':
+                    body = self._body()
+                    ctx.transport.forward(
+                        self, writer,
+                        knowledge_backend_url(self.path, app.upstream.rstrip('/'), app.prefix),
+                        self.command, body, dict(self.headers),
+                        timeout=app.timeout if app.timeout is not None else ctx.settings.api_timeout,
+                    )
+                    return
                 if app.kind == 'video':
                     body = self._body()
                     ctx.video.dispatch(self, writer, self.path, self.command, body, self.headers)
+                    return
+                if app.kind == 'monitor':
+                    self._serve_monitor_app(app)
                     return
                 raise RoutingError(404, f'Unsupported app kind: {app.kind}')
             if is_service_path(self.path):
@@ -423,6 +505,22 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 self._json(writer, ctx.monitor_api.snapshot() if key is None else ctx.monitor_api.detail(key, include_output))
                 return
             if not path.startswith(('/api/', '/v1/')):
+                if path in ('/', '/index.html') and self.command in ('GET', 'HEAD'):
+                    ctx.refresh()
+                    self._send_document(render_home(ctx.apps))
+                    return
+                if path == '/monitor.html' and self.command in ('GET', 'HEAD'):
+                    ctx.refresh()
+                    monitor = next((item for item in ctx.apps.values() if item.kind == 'monitor'), None)
+                    if monitor is not None:
+                        query = urlsplit(self.path).query
+                        location = monitor.endpoint + (('?' + query) if query else '')
+                        self._static_cache_control = 'no-cache'
+                        self.send_response(301)
+                        self.send_header('Location', location)
+                        self.send_header('Content-Length', '0')
+                        self.end_headers()
+                        return
                 if path in ('/', '/index.html', '/monitor.html'):
                     self._static_cache_control = 'no-cache'
                 elif re.fullmatch(r'/monitor-assets/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8,}\.(?:js|css|svg|png|webp|woff2?)', path):
@@ -555,7 +653,7 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO, format='[gateway] %(message)s')
     ctx = GatewayContext(project_paths(args.project_root))
     with create_server(ctx, args.host, args.port) as server:
-        log.info('Listening on http://%s:%s/monitor.html; scheduling config takes effect on restart', args.host, server.server_port)
+        log.info('Listening on http://%s:%s/; scheduling config takes effect on restart', args.host, server.server_port)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

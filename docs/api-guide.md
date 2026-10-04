@@ -19,6 +19,10 @@
 
 `/video/` 在网关进程内直接读写本机 `yt-study-archive`，不另开 HTTP 端口，也不占用模型 Key。浏览免认证；入队/重试使用视频库自己的 Bearer token。控制台 session 不能当视频库凭证。旧路径 `/archive/` 仅在 video 声明 `legacy_prefixes` 时 301 到 `/video/`。
 
+运行监控是内置应用 `kind: monitor`，默认入口 `/monitor/`，页面里再进入模型对话。未在 `models.json` 声明时网关仍会挂上这一项；声明后可以改别名和前缀。旧地址 `/monitor.html` 在该应用存在时 301 到它的入口，并保留查询参数。
+
+应用也可以自行登记一个和知识库同类的 HTTP 入口。`PUT /gateway-api/v1/apps/<键>` 使用模型 API Key，正文为 `alias`、`prefix`、`upstream`；网关把 `/prefix/` 反代到该上游并转发客户端 Authorization。记录写在被忽略的 `data/gateway-apps.json`，不进入 Git。`DELETE` 同一路径即卸下。`./manage.sh apps list|remove` 管理这份本机登记。`kind` 仍只有 `knowledge`、`video` 能使用各自的专用实现；自行注册固定为 `http`，不能覆盖 `models.json` 里已有的键或路径。
+
 `/services/<key>/` 使用模型 API Key；默认不转发 `Authorization`（`auth.upstream=none`），控制台 session 不能当业务凭证。`Upgrade: websocket` 返回 501。未探活返回 503，未知键或未允许路径返回 404。这些键不出现在 `GET /v1/models`。
 
 网关入口 Key 与后端 Key 可以不同。转发和健康探测按“运行实例记录的 `api_key_file` → 模型 `runtime.api_key_file` → 项目 `.api-key`”读取后端凭据；PID 只记录文件引用和来源。通过 `--api-key` / `API_KEY` 启动的内联密钥不能由另一个网关进程可靠恢复，直连仍可使用，代理会返回不可用诊断；需要代理时改用 `--api-key-file` / `API_KEY_FILE`，或配置 `runtime.api_key_file` 后重新启动。缺失凭据文件也会显示在监控 `unavailable_backends` 中，不向客户端暴露密钥。
@@ -38,6 +42,8 @@
 | `/api/ollama/*` | Ollama 原生接口 | 原生推理也经过调度 |
 | `/knowledge/*` | `type: app` / `kind: knowledge`，外部知识库反代 | 不属于模型 API |
 | `/video/*` | `type: app` / `kind: video`，本机视频学习库 | 不属于模型 API |
+| `/monitor/` | `type: app` / `kind: monitor`，运行监控与模型对话 | 不属于模型 API |
+| `/gateway-api/v1/apps` | 自行注册或卸下 `kind: http` 入口 | 不属于模型 API，要模型 Key |
 | `/services/<key>/*` | 登记为 `type: proxy` 的外部 HTTP 反代 | 不属于模型 API，不占 lane |
 
 Responses / Messages 仅在模型 `endpoints` 显式包含 `/v1/responses`、`/v1/messages` 时开放。网关提供透传与相应流式错误封装，实际模型后端必须支持对应协议。

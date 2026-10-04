@@ -163,5 +163,10 @@
     "alias": "视频库",
     "home": "~/.yt-study-archive",
     "legacy_prefixes": ["/archive"]
+  },
+  "monitor": {
+    "type": "app",
+    "kind": "monitor",
+    "alias": "运行监控"
   }
 }

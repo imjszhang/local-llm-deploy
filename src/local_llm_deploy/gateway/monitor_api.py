@@ -343,15 +343,21 @@ class MonitorAPI:
         return sorted(rows, key=lambda row: row['key'])
 
     def _app_availability(self, spec):
-        if spec.kind == 'knowledge':
+        if spec.kind in ('knowledge', 'http'):
             from .apps import knowledge_upstream
             from .discovery import tcp_connect_ok
-            parsed = urlsplit(knowledge_upstream(spec, self.context.settings))
+            upstream = spec.upstream if spec.kind == 'http' else knowledge_upstream(spec, self.context.settings)
+            parsed = urlsplit(upstream)
             host = parsed.hostname or '127.0.0.1'
             port = parsed.port or (443 if parsed.scheme == 'https' else 80)
             if not tcp_connect_ok(host, port):
                 return 'unreachable', 'Backend could not be reached'
             return 'healthy', None
+        if spec.kind == 'monitor':
+            page = self.context.paths.static / 'monitor.html'
+            if page.is_file():
+                return 'healthy', None
+            return 'unready', 'Monitor page is not published'
         if spec.kind == 'video':
             from pathlib import Path
             from .apps import video_home, video_root

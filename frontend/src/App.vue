@@ -33,6 +33,7 @@ onBeforeUnmount(() => { disposed = true; localRequest?.abort(); window.removeEve
 </script>
 <template>
   <nav class="workspace-nav" :class="{ 'workspace-nav--chat': chat }" aria-label="工作区">
+    <a href="/">应用首页</a>
     <a href="#/monitor" :aria-current="!chat ? 'page' : undefined">运行监控</a>
     <a href="#/chat" :aria-current="chat ? 'page' : undefined">模型对话</a>
     <span>LOCAL LLM · 本地工作台</span>

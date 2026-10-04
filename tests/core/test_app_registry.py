@@ -70,6 +70,17 @@ class AppRegistryTests(unittest.TestCase):
             normalize_app("knowledge", knowledge_cfg(prefix="/services/leak"))
         with self.assertRaises(ConfigError):
             normalize_app("video", video_cfg(kind="other"))
+        models, _proxies, apps = normalize_registry({
+            "notes": {"type": "app", "kind": "http", "alias": "笔记", "prefix": "/notes",
+                      "upstream": "http://127.0.0.1:19000"},
+            "board": {"type": "app", "kind": "http", "alias": "看板", "prefix": "/board",
+                      "upstream": "http://127.0.0.1:19001"},
+        })
+        self.assertEqual(set(apps), {"notes", "board"})
+        self.assertEqual(models, {})
+        with self.assertRaises(ConfigError):
+            normalize_app("notes", {"type": "app", "kind": "http", "alias": "笔记",
+                                    "upstream": "http://127.0.0.1:19000"})
 
     def test_dump_and_disk_round_trip_retain_apps(self):
         raw = {"chat": {"alias": "chat-alias"}, "knowledge": knowledge_cfg(), "comfyui": proxy_cfg()}

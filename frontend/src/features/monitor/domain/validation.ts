@@ -90,7 +90,7 @@ const service = (v: unknown): MonitorService => {
 const app = (v: unknown): MonitorApp => {
   const o = object(v), availability = object(o.availability)
   return {
-    key: string(o.key), alias: string(o.alias), kind: oneOf(o.kind, ['knowledge', 'video']),
+    key: string(o.key), alias: string(o.alias), kind: oneOf(o.kind, ['knowledge', 'video', 'monitor', 'http']),
     endpoint: string(o.endpoint), href: string(o.href),
     availability: { state: oneOf(availability.state, ['healthy', 'unready', 'unauthorized', 'unreachable', 'unknown']), reason: nullableString(availability.reason) },
   }

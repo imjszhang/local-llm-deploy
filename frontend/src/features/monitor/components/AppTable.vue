@@ -10,6 +10,8 @@ const props = defineProps<{
 const notes: Record<string, string> = {
   knowledge: "独立知识库反代",
   video: "本机视频库",
+  monitor: "运行监控与模型对话",
+  http: "自行注册的应用入口",
 };
 
 function tone(state: MonitorApp["availability"]["state"]) {
