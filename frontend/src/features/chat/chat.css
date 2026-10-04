@@ -132,19 +132,39 @@ body:has(.workspace-nav--chat) .modal-panel {
 .chat-sessions > .button--primary:hover:not(:disabled) { border-color: #b9b1ee; background: var(--chat-accent-soft); }
 .chat-session-list { flex: 1; min-height: 100px; margin-top: 22px; overflow: auto; scrollbar-width: thin; scrollbar-color: #c9cedc transparent; }
 .chat-session {
+  display: flex;
+  align-items: stretch;
   width: 100%;
   margin-bottom: 6px;
-  padding: 13px 12px;
   border: 1px solid transparent;
   border-radius: 9px;
   background: transparent;
   color: var(--chat-text);
+}
+.chat-session:hover { background: #eceff6; }
+.chat-workspace .chat-session-open {
+  flex: 1;
+  min-width: 0;
+  padding: 13px 4px 13px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
-.chat-session:hover { background: #eceff6; }
+.chat-workspace .chat-session-open:hover { background: transparent; color: inherit; }
 .chat-session strong { display: block; overflow: hidden; font-size: 13px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .chat-session span { display: block; margin-top: 6px; color: var(--chat-muted); font-size: 11px; }
+.chat-workspace .chat-session-delete {
+  align-self: center;
+  flex: none;
+  margin-right: 6px;
+  padding: 4px 6px;
+  color: #8d4038;
+  font-size: 11px;
+}
+.chat-workspace .chat-session-delete:hover:not(:disabled) { background: #f8e8e6; color: #8d4038; }
 .chat-session[aria-current="true"] { border-color: #e0def4; background: #ffffff; box-shadow: 0 2px 5px #24304a04, inset 3px 0 var(--chat-accent); }
 .chat-session[aria-current="true"] strong { color: var(--chat-accent); }
 .chat-memory-note { margin: 12px 5px 0; padding-top: 14px; border-top: 1px solid var(--chat-line); color: var(--chat-muted); font-size: 11px; line-height: 1.8; }

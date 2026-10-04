@@ -63,7 +63,7 @@ test('deleting a saved session persists across refresh', async ({ page }) => {
   const { workspace, state } = await setup(page)
   await workspace.getByLabel('消息输入').fill('稍后删除的会话')
   await saved(page)
-  await workspace.getByRole('button', { name: '删除', exact: true }).click()
+  await workspace.getByRole('button', { name: '删除「新对话」', exact: true }).click()
   await page.getByRole('button', { name: '删除会话', exact: true }).click()
   await expect.poll(() => state.documents.size).toBe(0)
   await page.reload()

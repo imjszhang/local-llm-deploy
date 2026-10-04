@@ -24,7 +24,7 @@ const narrow = ref(window.innerWidth <= 700), compact = ref(window.innerWidth <=
 function resize() { narrow.value = window.innerWidth <= 700; compact.value = window.innerWidth <= 1100 }
 function focusTrigger(event: Event) { (event.currentTarget as HTMLElement)?.focus() }
 const accessOpen = ref(false), sidebarOpen = ref(false), settingsOpen = ref(false)
-const pendingModel = ref(''), rename = ref(''), renameOpen = ref(false), deleteOpen = ref(false)
+const pendingModel = ref(''), rename = ref(''), renameOpen = ref(false), deleteOpen = ref(false), deleteId = ref('')
 const reloadOpen = ref(false)
 const list = ref<HTMLElement>(), composer = ref<InstanceType<typeof ChatComposer>>(), atBottom = ref(true), notice = ref('')
 const model = computed(() => models.value.find(m => m.key === current.value?.model))
@@ -53,6 +53,10 @@ function hashModel() {
 }
 watch(history.ready, ready => { if (ready) hashModel() })
 function beforeUnload(event: BeforeUnloadEvent) { if (busySession.value || hasUnsaved.value) event.preventDefault() }
+const deleteTitle = computed(() => sessions.value.find(session => session.id === deleteId.value)?.title || '这个会话')
+function askRemove(id: string) { deleteId.value = id; deleteOpen.value = true }
+function closeDelete() { deleteOpen.value = false; deleteId.value = '' }
+function confirmRemove() { const id = deleteId.value; closeDelete(); if (id) void chat.remove(id) }
 onMounted(() => { hashModel(); window.addEventListener('resize', resize); window.addEventListener('hashchange', hashModel); window.addEventListener('beforeunload', beforeUnload) })
 onBeforeUnmount(() => { window.removeEventListener('resize', resize); window.removeEventListener('hashchange', hashModel); window.removeEventListener('beforeunload', beforeUnload) })
 </script>
@@ -68,7 +72,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', resize); window.rem
       </div>
     </header>
     <div class="chat-layout" :class="{ 'settings-visible': settingsOpen }">
-      <SessionSidebar v-if="!narrow" :sessions="sessions" :selected-id="selectedId" :busy-session="busySession" :disabled="historyLoading" :is-loaded="history.isLoaded" @create="chat.create()" @select="selectedId = $event" />
+      <SessionSidebar v-if="!narrow" :sessions="sessions" :selected-id="selectedId" :busy-session="busySession" :disabled="historyLoading" :is-loaded="history.isLoaded" @create="chat.create()" @select="selectedId = $event" @remove="askRemove" />
       <main v-if="editable && current" class="chat-main">
         <HistoryStatus :status="historyStatus" :message="historyMessage" :pending="hasUnsaved" :elsewhere="!!issueSessionId && issueSessionId !== selectedId" @open-issue="selectedId = issueSessionId" @retry="history.retry()" @reload="reloadOpen = true" @copy="history.copyCurrent()" />
         <div class="chat-model-bar">
@@ -86,7 +90,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', resize); window.rem
         <div class="chat-session-toolbar">
           <strong>{{ current.title }}</strong>
           <button @click="rename = current.title; renameOpen = true">重命名</button>
-          <button @click="deleteOpen = true">删除</button>
+          <button @click="askRemove(selectedId)">删除</button>
           <button @click="exportSession(current, 'markdown')">导出 Markdown</button>
           <button @click="exportSession(current, 'json')">导出 JSON</button>
         </div>
@@ -123,11 +127,11 @@ onBeforeUnmount(() => { window.removeEventListener('resize', resize); window.rem
       <ParameterPanel v-if="settingsOpen && editable && current && !compact" :model-value="current" :backend="model?.backend" :controls="model?.chat_controls" @close="settingsOpen = false" />
     </div>
     <DialogShell v-if="settingsOpen && editable && current && compact" label-id="chat-settings-title" kind="drawer" @close="settingsOpen = false"><div class="chat-workspace chat-dialog-content"><h2 id="chat-settings-title">对话参数</h2><ParameterPanel :model-value="current" :backend="model?.backend" :controls="model?.chat_controls" @close="settingsOpen = false" /></div></DialogShell>
-    <DialogShell v-if="sidebarOpen && narrow" label-id="chat-sessions-title" kind="drawer" @close="sidebarOpen = false"><div class="chat-workspace chat-dialog-content"><div class="chat-message-heading"><h2 id="chat-sessions-title">会话列表</h2><button @click="sidebarOpen = false">关闭</button></div><SessionSidebar :sessions="sessions" :selected-id="selectedId" :busy-session="busySession" :disabled="historyLoading" :is-loaded="history.isLoaded" @create="chat.create(); sidebarOpen = false" @select="selectedId = $event; sidebarOpen = false" /></div></DialogShell>
+    <DialogShell v-if="sidebarOpen && narrow" label-id="chat-sessions-title" kind="drawer" @close="sidebarOpen = false"><div class="chat-workspace chat-dialog-content"><div class="chat-message-heading"><h2 id="chat-sessions-title">会话列表</h2><button @click="sidebarOpen = false">关闭</button></div><SessionSidebar :sessions="sessions" :selected-id="selectedId" :busy-session="busySession" :disabled="historyLoading" :is-loaded="history.isLoaded" @create="chat.create(); sidebarOpen = false" @select="selectedId = $event; sidebarOpen = false" @remove="askRemove" /></div></DialogShell>
     <AccessDialog v-if="accessOpen" :has-credential="monitor.keySet.value" @close="accessOpen = false" @apply="monitor.applyKey" @clear="monitor.clearKey" />
     <DialogShell v-if="pendingModel" label-id="switch-model-title" @close="pendingModel = ''"><h2 id="switch-model-title">切换对话模型</h2><p>选择是否将当前有效上下文交给新模型。</p><div class="dialog-actions"><button class="button" @click="pendingModel = ''">取消</button><button class="button" @click="changeModel(true)">携带上下文切换</button><button class="button button--primary" @click="changeModel(false)">新建会话</button></div></DialogShell>
     <DialogShell v-if="renameOpen" label-id="rename-title" @close="renameOpen = false"><h2 id="rename-title">重命名会话</h2><form @submit.prevent="current!.title = rename.trim() || '新对话'; renameOpen = false"><input v-model="rename" aria-label="会话名称" maxlength="100" /><button class="button button--primary" type="submit">保存</button></form></DialogShell>
-    <DialogShell v-if="deleteOpen" label-id="delete-title" @close="deleteOpen = false"><h2 id="delete-title">删除当前会话？</h2><p>该会话将从本机历史记录中删除。{{ busySession === selectedId ? '同时停止接收当前生成，后端可能仍在收尾。' : '' }}</p><div class="dialog-actions"><button class="button" @click="deleteOpen = false">取消</button><button class="button button--primary" @click="deleteOpen = false; chat.remove(selectedId)">删除会话</button></div></DialogShell>
+    <DialogShell v-if="deleteOpen" label-id="delete-title" @close="closeDelete"><h2 id="delete-title">删除这个会话？</h2><p>「{{ deleteTitle }}」将从本机历史记录中删除。{{ busySession === deleteId ? '同时停止接收当前生成，后端可能仍在收尾。' : '' }}</p><div class="dialog-actions"><button class="button" @click="closeDelete">取消</button><button class="button button--primary" @click="confirmRemove">删除会话</button></div></DialogShell>
     <DialogShell v-if="reloadOpen" label-id="reload-chat-title" @close="reloadOpen = false"><h2 id="reload-chat-title">载入已保存版本？</h2><p>当前页面未保存的修改将被放弃。需要保留时，可以取消并选择“保存为新会话”。</p><div class="dialog-actions"><button class="button" @click="reloadOpen = false">取消</button><button class="button button--primary" @click="reloadOpen = false; history.reload()">确认载入</button></div></DialogShell>
   </section>
 </template>
