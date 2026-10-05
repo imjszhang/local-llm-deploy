@@ -14,7 +14,7 @@ function setup(extra: Parameters<typeof useMonitor>[0] = {}) {
   const client = {
     snapshot: vi.fn<MonitorClient['snapshot']>().mockImplementation(async () => sampleSnapshot()),
     detail: vi.fn<MonitorClient['detail']>().mockImplementation(async key => sampleDetail(key)),
-    publicOverview: vi.fn<MonitorClient['publicOverview']>().mockResolvedValue({ model_count: 1, lanes: {}, system: null, last_success_at: null }),
+    publicOverview: vi.fn<MonitorClient['publicOverview']>().mockResolvedValue({ model_count: 1, lanes: {}, catalog: [], system: null, last_success_at: null }),
   }
   const monitor = useMonitor({ client, document: visibility, requestTimeout: 8000, ...extra })
   stops.push(monitor.stop)

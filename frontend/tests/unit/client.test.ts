@@ -101,6 +101,6 @@ describe('monitor API boundary', () => {
   it('keeps partially available public readings null instead of inventing data', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async input => String(input) === '/api/models'
       ? Response.json({ models: [{}], lanes: {} }) : new Response('unavailable', { status: 503 }))
-    expect(await createMonitorClient(fetcher).publicOverview(signal())).toEqual({ model_count: 1, lanes: {}, system: null, last_success_at: null })
+    expect(await createMonitorClient(fetcher).publicOverview(signal())).toEqual({ model_count: 1, lanes: {}, catalog: [], system: null, last_success_at: null })
   })
 })

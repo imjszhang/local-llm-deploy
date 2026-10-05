@@ -1,5 +1,6 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import type { ConsoleContext } from '../../../app/context'
+import { createId } from '../domain/id'
 import type { Answer, Session, Turn } from '../domain/types'
 import { contextMessages } from '../domain/context'
 import { ChatError, streamChat } from '../api/client'
@@ -14,10 +15,25 @@ export function useChat(context: ConsoleContext, options: { persistence?: boolea
     generation++; stop(); busySession.value = null; error.value = ''
   } })
   const { sessions, selectedId, current } = history
-  const models = computed(() => context.monitor.snapshot.value?.models.filter(m => m.capabilities.includes('chat')) ?? [])
+  const models = computed(() => {
+    const privileged = context.monitor.snapshot.value?.models.filter(m => m.capabilities.includes('chat')) ?? []
+    if (privileged.length) return privileged
+    // LAN browsers have no local session. The public catalog still names the chat models
+    // so the selector is usable before a gateway key unlocks the full snapshot.
+    return (context.monitor.publicOverview.value?.catalog ?? []).filter(item => item.capabilities.includes('chat')).map(item => ({
+      key: item.name, alias: item.name, backend: item.backend, backend_model: item.name, capabilities: item.capabilities,
+      chat_controls: null, registered: true, management: item.backend === 'ollama' ? 'external' as const : 'process' as const,
+      port: null, lifecycle: { state: 'unknown' as const, reason: null },
+      availability: { state: 'unknown' as const, reason: null },
+      routing: { available: null, reason: null },
+      activity: { active: 0, waiting: 0, uncertain: false, scope: 'gateway' as const },
+      monitoring_support: { health: false, metrics: false, slots: false, process_stats: false, output: false },
+      budget: null, loaded: null, endpoint: '',
+    }))
+  })
   function create(model = current.value?.model ?? '') {
     error.value = ''
-    return history.create(model)
+    return history.create(model, true)
   }
   async function remove(id: string) {
     if (busySession.value === id) stop()
@@ -27,13 +43,13 @@ export function useChat(context: ConsoleContext, options: { persistence?: boolea
     if (busySession.value || history.loading.value || !history.isLoaded(session.id)) return
     error.value = ''
     const model = models.value.find(m => m.key === session.model)
-    if (!model || model.routing.available !== true) { error.value = '请选择当前可路由的对话模型'; return }
+    if (!model || model.routing.available === false) { error.value = '请选择当前可路由的对话模型'; return }
     try { wireParameters(session.parameters, model.backend, model.chat_controls) } catch (cause) { error.value = (cause as Error).message; return }
     const request = { model: model.key, backend: model.backend, parameters: { ...session.parameters },
       chat_controls: model.chat_controls ? { ...model.chat_controls, reasoning_efforts: [...model.chat_controls.reasoning_efforts] } : null,
       messages: contextMessages(session, session.turns.indexOf(turn)) }
     request.messages.push({ role: 'user', content: turn.user })
-    const answer: Answer = { id: crypto.randomUUID(), content: '', reasoning: '', status: 'waiting', adopted: false, startedAt: Date.now(), request }
+    const answer: Answer = { id: createId(), content: '', reasoning: '', status: 'waiting', adopted: false, startedAt: Date.now(), request }
     turn.answers.push(answer); turn.selected = turn.answers.length - 1
     // Work through the reactive proxy so streaming changes render immediately.
     const live = turn.answers[turn.selected]!
@@ -86,10 +102,10 @@ export function useChat(context: ConsoleContext, options: { persistence?: boolea
     const session = current.value
     if (!session || !session.draft.trim() || busySession.value || history.loading.value || !history.isLoaded(session.id)) return
     const model = models.value.find(m => m.key === session.model)
-    if (!model || model.routing.available !== true) { error.value = '请选择当前可路由的对话模型'; return }
+    if (!model || model.routing.available === false) { error.value = '请选择当前可路由的对话模型'; return }
     try { wireParameters(session.parameters, model.backend, model.chat_controls) } catch (cause) { error.value = (cause as Error).message; return }
     const text = session.draft.trim()
-    session.turns.push({ id: crypto.randomUUID(), user: text, answers: [], selected: 0 })
+    session.turns.push({ id: createId(), user: text, answers: [], selected: 0 })
     if (session.turns.length === 1 && session.title === '新对话') session.title = [...text].slice(0, 32).join('')
     session.draft = ''
     await generate(session, session.turns[session.turns.length - 1]!)
@@ -105,7 +121,7 @@ export function useChat(context: ConsoleContext, options: { persistence?: boolea
     if (turn) session.draft = turn.user
   }
   function switchModel(model: string, carry: boolean) {
-    if (busySession.value || history.loading.value) return
+    if (busySession.value) return
     if (current.value && (!current.value.turns.length || carry)) {
       if (current.value.model !== model) {
         delete current.value.parameters.thinking

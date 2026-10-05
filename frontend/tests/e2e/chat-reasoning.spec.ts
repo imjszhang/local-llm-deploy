@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { mockMonitor } from '../fixtures/browser'
+import { mockChatHistory } from '../fixtures/chat-history'
 import type { Session } from '../../src/features/chat/domain/types'
 
 async function setup(page: Page, ollama = false) {
@@ -10,6 +11,9 @@ async function setup(page: Page, ollama = false) {
     model.backend_model = 'qwen3.8:27b-mlx'
     model.chat_controls = { thinking: true, reasoning_efforts: ['low', 'medium', 'high'], reasoning_budget: false, default_thinking: true, default_effort: null, source: 'configured' }
   }
+  const history = await mockChatHistory(page)
+  history.token = 'fixture-key'
+  await page.addInitScript(() => localStorage.setItem('local-llm-deploy.gateway-api-key', 'fixture-key'))
   const requests: Record<string, unknown>[] = []
   await page.route('**/v1/chat/completions', async route => {
     requests.push(route.request().postDataJSON())
@@ -84,6 +88,7 @@ test('request snapshots and JSON export preserve the selected thinking settings 
   await expect(snapshot).toContainText('"reasoning_effort": "xhigh"')
   await expect(snapshot).toContainText('"reasoning_budget_tokens": 2048')
   const downloadPromise = page.waitForEvent('download')
+  await workspace.getByLabel('会话操作', { exact: true }).click()
   await workspace.getByRole('button', { name: '导出 JSON' }).click()
   const stream = await (await downloadPromise).createReadStream()
   let text = ''

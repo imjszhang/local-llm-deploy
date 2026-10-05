@@ -35,6 +35,18 @@ function setup(initial: Session[] = [], enabled = true, token = 'credential') {
 }
 
 describe('automatic chat history persistence', () => {
+  it('keeps routine saves silent and shows actionable failures', async () => {
+    const wrapper = mount(HistoryStatus, { attachTo: document.body, props: { status: 'pending', message: '等待保存', pending: true } })
+    wrappers.push(wrapper)
+    for (const status of ['loading', 'pending', 'saving', 'saved']) {
+      await wrapper.setProps({ status })
+      expect(wrapper.isVisible()).toBe(false)
+    }
+    await wrapper.setProps({ status: 'error', message: '连接中断' })
+    expect(wrapper.isVisible()).toBe(true)
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.emitted('retry')).toHaveLength(1)
+  })
   it('routes another session error to that session instead of offering destructive actions here', async () => {
     const wrapper = mount(HistoryStatus, { props: { status: 'conflict', message: 'conflict', pending: true, elsewhere: true } })
     wrappers.push(wrapper)
@@ -50,7 +62,7 @@ describe('automatic chat history persistence', () => {
     history.current.value!.draft = 'local conflict'
     await history.flush()
     history.selectedId.value = 'second'; await settle()
-    expect(history.status.value).toBe('conflict')
+    expect(history.status.value).not.toBe('conflict')
     expect(history.issueSessionId.value).toBe('first')
     expect(history.current.value!.id).toBe('second')
     history.selectedId.value = history.issueSessionId.value; await settle()
@@ -210,6 +222,45 @@ describe('automatic chat history persistence', () => {
     credential.value = ''; await settle()
     expect(history.ready.value).toBe(true); expect(history.status.value).toBe('unauthorized')
     expect(client.list).toHaveBeenCalledTimes(2)
+  })
+  it('opens a local draft when a saved session cannot be read', async () => {
+    const { history, client } = setup([session('stored-1')])
+    client.get.mockRejectedValue(new HistoryApiError('unauthorized', 401))
+    await settle()
+    expect(history.sessions.value.some(item => item.id === 'stored-1')).toBe(true)
+    expect(history.isLoaded('stored-1')).toBe(false)
+    expect(history.isLoaded(history.current.value!.id)).toBe(true)
+    expect(history.current.value!.id).not.toBe('stored-1')
+    const created = history.create('qwen-lan', true)
+    expect(history.current.value!.id).toBe(created.id)
+    expect(history.current.value!.model).toBe('qwen-lan')
+    expect(history.isLoaded(created.id)).toBe(true)
+  })
+  it('keeps a new chat clear of another session that failed to open', async () => {
+    const { history, client } = setup([session('stored-1')])
+    client.get.mockRejectedValue(new HistoryApiError('http', 503))
+    await settle()
+    history.selectedId.value = 'stored-1'
+    await settle()
+    expect(history.status.value).toBe('unavailable')
+    expect(history.message.value).toContain('暂时打不开')
+    const created = history.create('', true)
+    expect(history.current.value!.id).toBe(created.id)
+    expect(history.isLoaded(created.id)).toBe(true)
+    expect(history.status.value).not.toBe('error')
+    expect(history.status.value).not.toBe('unavailable')
+    expect(history.issueSessionId.value).toBe('stored-1')
+  })
+  it('keeps an explicit new chat when the history list arrives', async () => {
+    const listed = deferred<Awaited<ReturnType<HistoryClient['list']>>>()
+    const { history, client } = setup([session('stored-1')])
+    client.list.mockImplementationOnce(() => listed.promise)
+    const created = history.create('kept', true)
+    listed.resolve([{ id: 'stored-1', title: 'stored-1', model: 'model', revision: 1, created_at: 1, updated_at: 2 }])
+    await settle()
+    expect(history.sessions.value.some(item => item.id === created.id)).toBe(true)
+    expect(history.isLoaded(created.id)).toBe(true)
+    expect(client.get.mock.calls.map(args => args[0])).not.toContain(created.id)
   })
   it('recovers from locally invalid parameter edits without a network retry loop', async () => {
     const { history, client } = setup()

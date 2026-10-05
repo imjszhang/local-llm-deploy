@@ -1,5 +1,5 @@
 import type {
-  ChatControls, DataState, Diagnostic, Lane, LaneKey, ModelDetail, MonitorApp, MonitorModel, MonitorService, PublicOverview,
+  ChatControls, DataState, Diagnostic, Lane, LaneKey, ModelDetail, MonitorApp, MonitorModel, MonitorService, PublicModel, PublicOverview,
   Section, Snapshot, SourceState, SystemData,
 } from '../api/types'
 
@@ -145,13 +145,31 @@ export function parseDetail(value: unknown, requestedKey: string, includeOutput 
       vram_gb: nullableNumber(ollama.vram_gb), quantization: nullableString(ollama.quantization), expires_at: nullableString(ollama.expires_at) },
   }
 }
-export function parsePublicModels(value: unknown): Pick<PublicOverview, 'lanes' | 'model_count'> {
+function publicModel(value: unknown): PublicModel | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const name = typeof row.name === 'string' ? row.name.trim() : ''
+  if (!name || name.length > 512 || /[\r\n]/.test(name)) return null
+  const capabilities = Array.isArray(row.capabilities)
+    ? row.capabilities.filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 64).slice(0, 16)
+    : []
+  return { name, capabilities, backend: row.ollama === true ? 'ollama' : 'llama_cpp' }
+}
+export function parsePublicModels(value: unknown): Pick<PublicOverview, 'lanes' | 'model_count' | 'catalog'> {
   const o = object(value)
   if (!Array.isArray(o.models) || o.models.length > 5000) return fail()
   const values = o.lanes === undefined ? {} : object(o.lanes)
   const result: Partial<Record<LaneKey, Lane>> = {}
   for (const key of lanes) if (values[key] !== undefined) result[key] = lane(values[key])
-  return { lanes: result, model_count: o.models.length }
+  const seen = new Set<string>()
+  const catalog: PublicModel[] = []
+  for (const item of o.models) {
+    const model = publicModel(item)
+    if (!model || seen.has(model.name)) continue
+    seen.add(model.name)
+    catalog.push(model)
+  }
+  return { lanes: result, model_count: o.models.length, catalog }
 }
 export function parsePublicSystem(value: unknown): Pick<PublicOverview, 'system' | 'last_success_at'> {
   const o = object(value)

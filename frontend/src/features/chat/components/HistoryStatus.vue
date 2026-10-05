@@ -7,7 +7,7 @@ const labels: Record<string, string> = {
 }
 </script>
 <template>
-  <div class="chat-history-status" :class="{ 'chat-history-status--error': ['error', 'conflict', 'unavailable'].includes(status) }" aria-label="会话保存状态">
+  <div v-show="['error', 'conflict', 'unavailable'].includes(status) || (status === 'unauthorized' && pending) || elsewhere" :data-save-state="status" class="chat-history-status" :class="{ 'chat-history-status--error': ['error', 'conflict', 'unavailable'].includes(status) }" aria-label="会话保存状态">
     <span role="status">{{ labels[status] ?? status }}<span v-if="pending && ['error', 'conflict', 'unavailable', 'unauthorized'].includes(status)"> · 修改尚未保存</span></span>
     <p v-if="message">{{ message }}</p>
     <div v-if="elsewhere" class="chat-history-actions"><button @click="$emit('openIssue')">查看需要处理的会话</button></div>

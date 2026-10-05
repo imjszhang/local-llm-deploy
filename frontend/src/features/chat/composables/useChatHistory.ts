@@ -1,5 +1,6 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { ConsoleContext } from '../../../app/context'
+import { createId } from '../domain/id'
 import { copySession, createHistoryClient, HistoryApiError, type HistoryClient, type SessionSummary } from '../api/history'
 import type { Session } from '../domain/types'
 
@@ -7,10 +8,10 @@ export type HistoryStatus = 'loading' | 'saved' | 'saving' | 'pending' | 'error'
 interface Entry {
   loaded: boolean; revision: number; saved: string; dirty: boolean; changedAt: number; dirtySince: number
   saving?: Promise<void>; loading?: Promise<void>; timer?: ReturnType<typeof setTimeout>; error?: HistoryApiError
-  deleting?: boolean; attempted?: boolean
+  deleting?: boolean; attempted?: boolean; explicit?: boolean
   validationError?: boolean; errorText?: string
 }
-const blank = (model = '', id: string = crypto.randomUUID(), title = '新对话'): Session => ({ id, title, model, system: '', parameters: {}, turns: [], draft: '' })
+const blank = (model = '', id: string = createId(), title = '新对话'): Session => ({ id, title, model, system: '', parameters: {}, turns: [], draft: '' })
 const meaningful = (session: Session) => !!(session.model || session.draft || session.system || session.turns.length || Object.keys(session.parameters).length || session.title !== '新对话')
 const serialize = (session: Session) => JSON.stringify(copySession(session))
 function restoreInterrupted(session: Session) {
@@ -29,7 +30,7 @@ export function useChatHistory(context: Pick<ConsoleContext, 'credential' | 'cre
   options: { enabled?: boolean; onReset?: () => void; client?: HistoryClient } = {}) {
   const enabled = options.enabled !== false, client = options.client ?? createHistoryClient()
   const sessions = ref<Session[]>([]), selectedId = ref(''), loading = ref(false), ready = ref(!enabled)
-  const issueSessionId = ref('')
+  const stateVersion = ref(0), issueSessionId = ref('')
   const status = ref<HistoryStatus>(enabled ? 'loading' : 'saved'), message = ref(''), unsaved = ref(false)
   const current = computed(() => sessions.value.find(session => session.id === selectedId.value))
   const hasUnsaved = computed(() => unsaved.value)
@@ -37,17 +38,23 @@ export function useChatHistory(context: Pick<ConsoleContext, 'credential' | 'cre
   let epoch = 0, disposed = false, listLoading = false, listFailed = false, topError: HistoryApiError | undefined, restoredNotice = ''
 
   function active(own: number) { return !disposed && own === epoch }
-  function isLoaded(id: string) { return entries.get(id)?.loaded === true }
+  function isLoaded(id: string) { void stateVersion.value; return entries.get(id)?.loaded === true }
   function updateState() {
     const all = [...entries.values()]
     loading.value = listLoading || !!entries.get(selectedId.value)?.loading
     unsaved.value = enabled && all.some(entry => entry.loaded && (entry.dirty || !!entry.saving))
     if (!enabled) { status.value = 'saved'; message.value = ''; return }
-    const issue = entries.get(selectedId.value)?.error ? selectedId.value : [...entries].find(([, entry]) => entry.error)?.[0]
-    issueSessionId.value = topError ? '' : issue ?? ''
-    const error = topError ?? (issue ? entries.get(issue)?.error : undefined)
+    const currentError = entries.get(selectedId.value)?.error
+    const otherId = [...entries].find(([id, entry]) => id !== selectedId.value && entry.error)?.[0]
+    issueSessionId.value = topError ? '' : currentError ? selectedId.value : otherId ?? ''
+    const error = topError ?? currentError
     if (loading.value) { status.value = 'loading'; message.value = '正在载入本机保存的对话'; return }
     if (error) {
+      if (!topError && selectedId.value && !entries.get(selectedId.value)?.loaded) {
+        status.value = 'unavailable'
+        message.value = '这条已保存的会话暂时打不开。可以新建对话继续。'
+        return
+      }
       status.value = error.kind === 'conflict' || error.kind === 'missing' ? 'conflict' : error.kind === 'unauthorized' ? 'unauthorized' : error.kind === 'unavailable' ? 'unavailable' : 'error'
       message.value = error.message; return
     }
@@ -90,12 +97,19 @@ export function useChatHistory(context: Pick<ConsoleContext, 'credential' | 'cre
     }
     updateState()
   }
-  function create(model = current.value?.model ?? ''): Session {
+  function create(model = current.value?.model ?? '', explicit = false): Session {
     const session = blank(model)
-    entries.set(session.id, { loaded: true, revision: 0, saved: '', dirty: false, changedAt: 0, dirtySince: 0 })
+    entries.set(session.id, { loaded: true, revision: 0, saved: '', dirty: false, changedAt: 0, dirtySince: 0, explicit })
     sessions.value.unshift(session); selectedId.value = session.id
+    stateVersion.value++
     inspect()
     return current.value!
+  }
+  function ensureUsableDraft() {
+    if (!enabled || listLoading) return
+    if ([...entries.values()].some(entry => entry.loading)) return
+    if (sessions.value.some(session => entries.get(session.id)?.loaded)) return
+    create(current.value?.model ?? '')
   }
   async function save(id: string): Promise<void> {
     const entry = entries.get(id), session = sessions.value.find(item => item.id === id)
@@ -149,7 +163,7 @@ export function useChatHistory(context: Pick<ConsoleContext, 'credential' | 'cre
         if (active(own) && entries.get(id) === entry && !abort.signal.aborted) entry.error = errorOf(cause)
       } finally {
         controllers.delete(abort)
-        if (active(own) && entries.get(id) === entry) { entry.loading = undefined; inspect() }
+        if (active(own) && entries.get(id) === entry) { entry.loading = undefined; stateVersion.value++; inspect(); ensureUsableDraft() }
       }
     })
     entry.loading = work; updateState()
@@ -159,7 +173,7 @@ export function useChatHistory(context: Pick<ConsoleContext, 'credential' | 'cre
     const previousId = selectedId.value
     const local = new Map(sessions.value.flatMap(session => {
       const entry = entries.get(session.id)
-      return preserve && entry?.loaded && (entry.dirty || (entry.revision === 0 && meaningful(session))) ? [[session.id, { session, entry }] as const] : []
+      return preserve && entry?.loaded && (entry.dirty || (entry.revision === 0 && (entry.explicit || meaningful(session)))) ? [[session.id, { session, entry }] as const] : []
     }))
     clearTimers(); entries.clear()
     const restored = items.map(item => {
@@ -178,6 +192,7 @@ export function useChatHistory(context: Pick<ConsoleContext, 'credential' | 'cre
       entries.set(id, pending.entry); restored.unshift(pending.session)
     }
     sessions.value = restored
+    stateVersion.value++
     selectedId.value = preserve && restored.some(session => session.id === previousId) ? previousId : restored[0]?.id ?? ''
     if (!restored.length) create('')
   }
@@ -194,7 +209,7 @@ export function useChatHistory(context: Pick<ConsoleContext, 'credential' | 'cre
       if (active(own) && !abort.signal.aborted) { topError = errorOf(cause); listFailed = true }
     } finally {
       controllers.delete(abort)
-      if (active(own)) { listLoading = false; ready.value = true; inspect() }
+      if (active(own)) { listLoading = false; ready.value = true; inspect(); ensureUsableDraft() }
     }
   }
   async function flush(): Promise<void> {

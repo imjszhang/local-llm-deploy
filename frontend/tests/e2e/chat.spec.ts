@@ -1,13 +1,18 @@
 import { expect, test, type Page } from '@playwright/test'
 import { mockMonitor } from '../fixtures/browser'
+import { mockChatHistory } from '../fixtures/chat-history'
 
 async function setup(page: Page, authenticated = false) {
   const state = await mockMonitor(page, { authenticated })
+  const history = await mockChatHistory(page)
+  history.token = 'fixture-key'
+  if (!authenticated) await page.addInitScript(() => localStorage.setItem('local-llm-deploy.gateway-api-key', 'fixture-key'))
   const requests: { model: string; messages: { role: string; content: string }[]; temperature?: number }[] = []
   await page.route('**/v1/chat/completions', async route => {
     requests.push(route.request().postDataJSON())
     await route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: `回答 ${requests.length}\n\n**安全 Markdown**` }, finish_reason: null }] })}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}\n\ndata: [DONE]\n\n` })
   })
+  if (authenticated) await page.route('**/console-api/v1/session', route => route.fulfill({ status: 403, json: {} }))
   await page.goto('/monitor.html#/chat')
   const workspace = page.getByRole('region', { name: '模型对话测试台' })
   if (authenticated) {
@@ -27,7 +32,7 @@ test('multi-turn, parameter snapshots, regeneration and editing build exact cont
   await workspace.getByLabel('Temperature', { exact: true }).fill('0.5')
   await workspace.getByLabel('消息输入').fill('第一问')
   await workspace.getByRole('button', { name: '发送 ↑' }).click()
-  await expect(workspace.getByText('已完成', { exact: true })).toHaveCount(1)
+  await expect(workspace.locator('.chat-assistant[data-status="complete"]')).toHaveCount(1)
   expect(requests[0]?.messages).toEqual([{ role: 'system', content: '简短回答' }, { role: 'user', content: '第一问' }])
   expect(requests[0]?.temperature).toBe(0.5)
   await workspace.getByRole('button', { name: '重新生成', exact: true }).click()
@@ -49,7 +54,7 @@ test('workspace navigation preserves conversation; model switch defaults to new 
   const { workspace } = await setup(page)
   await workspace.getByLabel('消息输入').fill('保留会话')
   await workspace.getByRole('button', { name: '发送 ↑' }).click()
-  await expect(workspace.getByText('已完成', { exact: true })).toBeVisible()
+  await expect(workspace.locator('.chat-assistant[data-status="complete"]')).toBeVisible()
   await page.getByRole('link', { name: '运行监控', exact: true }).click()
   await expect(workspace).toBeHidden()
   await expect(page.locator('#main-content')).toBeVisible()
@@ -59,7 +64,7 @@ test('workspace navigation preserves conversation; model switch defaults to new 
   await workspace.getByLabel('对话模型', { exact: true }).selectOption('qwen3-8b')
   await page.getByRole('dialog', { name: '切换对话模型' }).getByRole('button', { name: '新建会话' }).click()
   await expect(workspace.getByLabel('对话模型', { exact: true })).toHaveValue('qwen3-8b')
-  await expect(workspace.getByText('从一个问题开始测试')).toBeVisible()
+  await expect(workspace.getByText('今天想聊些什么？')).toBeVisible()
   await expect(workspace.locator('.chat-session')).toHaveCount(2)
 })
 
@@ -67,8 +72,9 @@ test('credential clear removes chat and stays out of export and storage', async 
   const { workspace } = await setup(page, true)
   await workspace.getByLabel('消息输入').fill('私有测试消息')
   await workspace.getByRole('button', { name: '发送 ↑' }).click()
-  await expect(workspace.getByText('已完成', { exact: true })).toBeVisible()
+  await expect(workspace.locator('.chat-assistant[data-status="complete"]')).toBeVisible()
   const download = page.waitForEvent('download')
+  await workspace.getByLabel('会话操作', { exact: true }).click()
   await workspace.getByRole('button', { name: '导出 JSON' }).click()
   const stream = await (await download).createReadStream()
   let exported = ''; for await (const chunk of stream!) exported += chunk.toString()
@@ -78,7 +84,7 @@ test('credential clear removes chat and stays out of export and storage', async 
   await workspace.getByRole('button', { name: '访问设置 · 已设置' }).click()
   await page.getByRole('button', { name: '清除凭据', exact: true }).click()
   await expect(workspace.getByText('私有测试消息', { exact: true })).toHaveCount(0)
-  await expect(workspace.getByText('从一个问题开始测试')).toBeVisible()
+  await expect(workspace.getByText('今天想聊些什么？')).toBeVisible()
 })
 
 test('unsafe Markdown cannot execute or load remote images', async ({ page }) => {
@@ -86,7 +92,7 @@ test('unsafe Markdown cannot execute or load remote images', async ({ page }) =>
   await page.route('**/v1/chat/completions', route => route.fulfill({ json: { choices: [{ message: { content: '<img src=x onerror="window.injected=1">\n\n[bad](javascript:alert(1))\n\n![remote](https://example.com/private.png)\n\n```python\nprint("hello")\n```' }, finish_reason: 'stop' }] } }))
   await workspace.getByLabel('消息输入').fill('测试渲染')
   await workspace.getByRole('button', { name: '发送 ↑' }).click()
-  await expect(workspace.getByText('已完成', { exact: true })).toBeVisible()
+  await expect(workspace.locator('.chat-assistant[data-status="complete"]')).toBeVisible()
   await expect(workspace.locator('.chat-markdown img')).toHaveCount(0)
   await expect(workspace.locator('.chat-markdown a[href^="javascript:"]')).toHaveCount(0)
   expect(await page.evaluate(() => 'injected' in window)).toBe(false)
@@ -117,7 +123,7 @@ for (const width of [375, 768, 1440]) {
     await workspace.getByLabel('消息输入').dispatchEvent('keydown', { key: 'Enter', isComposing: true })
     expect(requests).toHaveLength(0)
     await workspace.getByRole('button', { name: '发送 ↑' }).click()
-    await expect(workspace.getByText('已完成', { exact: true })).toBeVisible()
+    await expect(workspace.locator('.chat-assistant[data-status="complete"]')).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`chat-${width}.png`), fullPage: true })
     await workspace.getByRole('button', { name: '测试设置', exact: true }).click()
@@ -158,16 +164,18 @@ test('rename, copy code and delete session are keyboard accessible', async ({ pa
   await page.route('**/v1/chat/completions', route => route.fulfill({ json: { choices: [{ message: { content: '```python\nprint(42)\n```' }, finish_reason: 'stop' }] } }))
   await workspace.getByLabel('消息输入').fill('代码测试')
   await workspace.getByRole('button', { name: '发送 ↑' }).click()
-  await expect(workspace.getByText('已完成', { exact: true })).toBeVisible()
+  await expect(workspace.locator('.chat-assistant[data-status="complete"]')).toBeVisible()
   const codeButton = workspace.getByRole('button', { name: '复制代码', exact: true })
   await codeButton.focus()
   await page.keyboard.press('Enter')
   await expect(workspace.getByText('代码已复制', { exact: true })).toBeVisible()
+  await workspace.getByLabel('会话操作', { exact: true }).click()
   await workspace.getByRole('button', { name: '重命名', exact: true }).click()
   await page.getByLabel('会话名称', { exact: true }).fill('我的代码测试')
   await page.getByRole('button', { name: '保存', exact: true }).click()
   await expect(workspace.locator('.chat-session-toolbar strong')).toHaveText('我的代码测试')
+  await workspace.getByLabel('会话操作', { exact: true }).click()
   await workspace.getByRole('button', { name: '删除', exact: true }).click()
   await page.getByRole('button', { name: '删除会话', exact: true }).click()
-  await expect(workspace.getByText('从一个问题开始测试')).toBeVisible()
+  await expect(workspace.getByText('今天想聊些什么？')).toBeVisible()
 })

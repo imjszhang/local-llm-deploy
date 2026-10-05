@@ -16,7 +16,7 @@ async function setup(page: Page, failList = false) {
   await workspace.getByLabel('对话模型', { exact: true }).selectOption('qwen3.8-27b')
   return { workspace, state }
 }
-const saved = (page: Page) => expect(page.getByLabel('会话保存状态')).toContainText('已自动保存')
+const saved = (page: Page) => expect(page.getByLabel('会话保存状态')).toHaveAttribute('data-save-state', 'saved')
 
 test('autosaves drafts, parameters, reasoning, answer versions and restores after reload', async ({ page }) => {
   const { workspace, state } = await setup(page)

@@ -78,6 +78,7 @@ export function createMonitorClient(fetcher: typeof fetch = (...args) => globalT
       return {
         lanes: models.status === 'fulfilled' ? models.value.lanes : {},
         model_count: models.status === 'fulfilled' ? models.value.model_count : null,
+        catalog: models.status === 'fulfilled' ? models.value.catalog : [],
         system: system.status === 'fulfilled' ? system.value.system : null,
         last_success_at: system.status === 'fulfilled' ? system.value.last_success_at : null,
       }

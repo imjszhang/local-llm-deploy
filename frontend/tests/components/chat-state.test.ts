@@ -110,4 +110,25 @@ describe('chat request ownership', () => {
     expect(chat.busySession.value).toBeNull()
     wrapper.unmount()
   })
+  it('uses the public catalog when the privileged snapshot has no chat models', () => {
+    const monitor = useMonitor()
+    monitor.publicOverview.value = {
+      system: null, lanes: {}, model_count: 2, last_success_at: null,
+      catalog: [
+        { name: 'qwen-lan', capabilities: ['chat'], backend: 'llama_cpp' },
+        { name: 'embed-only', capabilities: ['embedding'], backend: 'llama_cpp' },
+      ],
+    }
+    let chat!: ReturnType<typeof useChat>
+    const wrapper = mount(defineComponent({ setup() {
+      chat = useChat({ monitor, credential: ref(''), credentialGeneration: ref(0) }, { persistence: false })
+      return () => null
+    } }))
+    expect(chat.models.value.map(item => item.key)).toEqual(['qwen-lan'])
+    expect(chat.models.value[0]?.routing.available).toBeNull()
+    chat.current.value!.model = 'qwen-lan'
+    chat.current.value!.draft = 'question'
+    expect(chat.models.value[0]?.routing.available === false).toBe(false)
+    wrapper.unmount()
+  })
 })

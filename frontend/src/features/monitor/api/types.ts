@@ -94,10 +94,16 @@ export interface ModelDetail {
   process: Section & { cpu_pct: number | null; rss_gb: number | null }
   ollama: Section & { version: string | null; loaded: boolean | null; size_gb: number | null; vram_gb: number | null; quantization: string | null; expires_at: string | null }
 }
+export interface PublicModel {
+  name: string
+  capabilities: string[]
+  backend: 'llama_cpp' | 'ollama'
+}
 export interface PublicOverview {
   system: SystemData | null
   lanes: Partial<Record<LaneKey, Lane>>
   model_count: number | null
   last_success_at: number | null
+  catalog: PublicModel[]
 }
 export interface HistorySample { time: number; cpu: number | null; memory: number | null }
