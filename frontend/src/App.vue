@@ -3,14 +3,37 @@ import { defineAsyncComponent, onBeforeUnmount, onMounted, provide, ref } from '
 import MonitorWorkspace from './features/monitor/MonitorWorkspace.vue'
 import { useMonitor } from './features/monitor/composables/useMonitor'
 import { consoleContext } from './app/context'
-import { requestLocalSession } from './shared/auth/localSession'
+import { isLocalConsole, requestLocalSession } from './shared/auth/localSession'
+import { readStoredKey, writeStoredKey } from './shared/auth/storedKey'
 const ChatWorkspace = defineAsyncComponent(() => import('./features/chat/ChatWorkspace.vue'))
 const credential = ref(''), credentialGeneration = ref(0)
 const credentialSource = ref<'none' | 'local' | 'manual'>('none'), localConnecting = ref(false)
 let applyingLocal = false, disposed = false, localRequest: AbortController | null = null
-const monitor = useMonitor({ onCredentialChange(token) {
-  credential.value = token; credentialSource.value = token ? applyingLocal ? 'local' : 'manual' : 'none'; credentialGeneration.value++
-} })
+const monitor = useMonitor({
+  onCredentialChange(token) {
+    credential.value = token
+    credentialSource.value = token ? applyingLocal ? 'local' : 'manual' : 'none'
+    credentialGeneration.value++
+    if (!applyingLocal) writeStoredKey(token)
+  },
+  onUnauthorized: recoverLocalSession,
+})
+async function recoverLocalSession() {
+  if (!isLocalConsole(location.hostname) || disposed) return false
+  const hadManual = credentialSource.value === 'manual'
+  const generation = credentialGeneration.value
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 5000)
+  try {
+    const session = await requestLocalSession(location.hostname, controller.signal)
+    if (!session || disposed || controller.signal.aborted || generation !== credentialGeneration.value) return false
+    applyingLocal = true
+    try { monitor.replaceToken(session.token) } finally { applyingLocal = false }
+  } finally { clearTimeout(timeout) }
+  const recovered = credentialSource.value === 'local' && credentialGeneration.value !== generation
+  if (recovered && hadManual) writeStoredKey('')
+  return recovered
+}
 async function connectLocal() {
   if (localConnecting.value) return
   const generation = credentialGeneration.value, controller = new AbortController()
@@ -28,7 +51,13 @@ provide(consoleContext, { monitor, credential, credentialGeneration, credentialS
 const chat = ref(location.hash.startsWith('#/chat'))
 const visitedChat = ref(chat.value)
 function navigate() { chat.value = location.hash.startsWith('#/chat'); visitedChat.value ||= chat.value }
-onMounted(async () => { window.addEventListener('hashchange', navigate); await connectLocal(); if (!disposed) monitor.start() })
+onMounted(async () => {
+  window.addEventListener('hashchange', navigate)
+  const stored = readStoredKey()
+  if (stored) monitor.applyKey(stored)
+  else await connectLocal()
+  if (!disposed) monitor.start()
+})
 onBeforeUnmount(() => { disposed = true; localRequest?.abort(); window.removeEventListener('hashchange', navigate); monitor.stop() })
 </script>
 <template>

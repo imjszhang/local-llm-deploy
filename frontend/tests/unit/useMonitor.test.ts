@@ -8,7 +8,7 @@ function deferred<T>() {
   const promise = new Promise<T>(yes => { resolve = yes })
   return { promise, resolve }
 }
-function setup() {
+function setup(extra: Parameters<typeof useMonitor>[0] = {}) {
   const visibility = new EventTarget() as EventTarget & { hidden: boolean }
   visibility.hidden = false
   const client = {
@@ -16,7 +16,7 @@ function setup() {
     detail: vi.fn<MonitorClient['detail']>().mockImplementation(async key => sampleDetail(key)),
     publicOverview: vi.fn<MonitorClient['publicOverview']>().mockResolvedValue({ model_count: 1, lanes: {}, system: null, last_success_at: null }),
   }
-  const monitor = useMonitor({ client, document: visibility, requestTimeout: 8000 })
+  const monitor = useMonitor({ client, document: visibility, requestTimeout: 8000, ...extra })
   stops.push(monitor.stop)
   return { monitor, client, visibility }
 }
@@ -66,6 +66,46 @@ describe('monitor polling lifecycle', () => {
     const publicCount = client.publicOverview.mock.calls.length
     await vi.advanceTimersByTimeAsync(20000)
     expect(client.publicOverview).toHaveBeenCalledTimes(publicCount)
+  })
+  it('renews a rejected credential without dropping models, and stops after the budget is spent', async () => {
+    const box: { monitor?: ReturnType<typeof useMonitor> } = {}
+    let issued = 0
+    const renew = vi.fn(async () => { issued++; box.monitor!.replaceToken(`renewed-${issued}`); return true })
+    const { monitor, client } = setup({ onUnauthorized: renew })
+    box.monitor = monitor
+    client.snapshot.mockRejectedValue(new MonitorApiError('unauthorized', 401))
+    monitor.applyKey('local-session'); monitor.start()
+    for (let i = 0; i < 8; i++) await flush()
+    expect(monitor.access.value).toBe('required')
+    expect(monitor.snapshot.value).toBeNull()
+    expect(issued).toBe(2)
+    expect(client.snapshot.mock.calls.map(call => call[1])).toEqual(['local-session', 'renewed-1', 'renewed-2'])
+  })
+  it('keeps the previous model list while a replacement credential is issued', async () => {
+    const box: { monitor?: ReturnType<typeof useMonitor> } = {}
+    const renew = vi.fn(async () => { box.monitor!.replaceToken('renewed-session'); return true })
+    const { monitor, client } = setup({ onUnauthorized: renew })
+    box.monitor = monitor
+    monitor.applyKey('local-session'); monitor.start(); await flush()
+    const visible = monitor.snapshot.value
+    const next = deferred<Snapshot>()
+    client.snapshot.mockRejectedValueOnce(new MonitorApiError('unauthorized', 401))
+    client.snapshot.mockReturnValueOnce(next.promise)
+    void monitor.refresh(); await flush()
+    expect(renew).toHaveBeenCalledTimes(1)
+    expect(monitor.access.value).toBe('authorized')
+    expect(monitor.snapshot.value).toBe(visible)
+    next.resolve(sampleSnapshot()); await flush()
+    expect(client.snapshot.mock.calls.at(-1)?.[1]).toBe('renewed-session')
+    expect(monitor.access.value).toBe('authorized')
+  })
+  it('does not renew after the credential is cleared', async () => {
+    const renew = vi.fn(async () => true)
+    const { monitor, client } = setup({ onUnauthorized: renew })
+    client.snapshot.mockRejectedValue(new MonitorApiError('unauthorized', 401))
+    monitor.start(); await flush()
+    expect(renew).not.toHaveBeenCalled()
+    expect(monitor.access.value).toBe('required')
   })
   it('404 v1 sets explicit unsupported state and keeps public fallback', async () => {
     const { monitor, client } = setup()

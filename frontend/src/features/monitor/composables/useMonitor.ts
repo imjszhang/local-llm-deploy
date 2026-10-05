@@ -7,6 +7,8 @@ type Resource = 'public' | 'snapshot' | 'detail'
 type Job = { generation: number; timer: ReturnType<typeof setTimeout> | null; controller: AbortController | null; failures: number }
 export interface MonitorOptions {
   onCredentialChange?: (token: string) => void
+  /** Return true after installing a replacement credential. A local console uses this to mint a new session instead of dropping the model list. */
+  onUnauthorized?: () => Promise<boolean> | boolean
   client?: MonitorClient
   fetch?: typeof fetch
   now?: () => number
@@ -27,7 +29,8 @@ export function useMonitor(options: MonitorOptions = {}) {
   const resources: Resource[] = ['public', 'snapshot', 'detail']
   const jobs: Record<Resource, Job> = Object.fromEntries(resources.map(r => [r, { generation: 0, timer: null, controller: null, failures: 0 }])) as Record<Resource, Job>
   const errors: Partial<Record<Resource, string>> = {}
-  let token = '', started = false
+  let token = '', started = false, unauthorizedRecoveries = 0
+  let recovery: Promise<boolean> | null = null
 
   const updateLoading = () => { loading.value = resources.some(r => jobs[r].controller !== null) }
   const updateError = () => { error.value = errors.snapshot ?? errors.detail ?? errors.public ?? null }
@@ -133,6 +136,7 @@ export function useMonitor(options: MonitorOptions = {}) {
       } else if (resource === 'snapshot') {
         snapshot.value = value as Snapshot
         access.value = token ? 'authorized' : 'open'
+        unauthorizedRecoveries = 0
         cancel('public')
         publicOverview.value = null
         delete errors.public
@@ -148,6 +152,20 @@ export function useMonitor(options: MonitorOptions = {}) {
       if (controller.signal.aborted && !timedOut) return
       const failure = cause instanceof MonitorApiError ? cause : null
       if (failure?.kind === 'unauthorized' && resource !== 'public') {
+        // An empty token is signed out on purpose. A live token may be renewed twice
+        // before the model list is dropped; a later success resets that budget.
+        // A renewal already in flight does not count as success for the token that just failed.
+        while (token && unauthorizedRecoveries < 2 && options.onUnauthorized) {
+          const failedToken = token
+          if (!recovery) {
+            unauthorizedRecoveries++
+            recovery = Promise.resolve(options.onUnauthorized()).then(Boolean).catch(() => false).finally(() => { recovery = null })
+          }
+          const recovered = await recovery
+          if (generation !== job.generation || !eligible(resource)) return
+          if (recovered && token !== failedToken) return
+        }
+        if (generation !== job.generation || !eligible(resource)) return
         connection.value = 'connected'
         unauthorized()
       } else if (failure?.kind === 'unsupported' && resource === 'snapshot') {
@@ -207,6 +225,18 @@ export function useMonitor(options: MonitorOptions = {}) {
     purgeProtected()
     access.value = 'unknown'
     resources.forEach(r => { jobs[r].failures = 0 })
+    unauthorizedRecoveries = 0
+    void refresh()
+  }
+  function replaceToken(value: string) {
+    if (value.length > 8192 || /[\r\n]/.test(value)) { error.value = '访问凭据格式无效'; return }
+    const next = value.trim()
+    if (!next) return
+    cancelAll()
+    token = next
+    options.onCredentialChange?.(token)
+    keySet.value = true
+    resources.forEach(r => { jobs[r].failures = 0 })
     void refresh()
   }
   function clearKey() {
@@ -247,5 +277,5 @@ export function useMonitor(options: MonitorOptions = {}) {
     void run('detail')
   }
   return { snapshot, detail, publicOverview, history, connection, access, paused, loading, lastSuccessAt,
-    error, keySet, selectedKey, includeOutput, start, stop, refresh, setPaused, applyKey, clearKey, selectModel, setIncludeOutput }
+    error, keySet, selectedKey, includeOutput, start, stop, refresh, setPaused, applyKey, replaceToken, clearKey, selectModel, setIncludeOutput }
 }

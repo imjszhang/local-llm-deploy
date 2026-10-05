@@ -74,7 +74,7 @@ test('credential clear removes chat and stays out of export and storage', async 
   let exported = ''; for await (const chunk of stream!) exported += chunk.toString()
   expect(exported).toContain('schema_version')
   expect(exported).not.toContain('fixture-key')
-  expect(await page.evaluate(() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)]))).not.toContain('fixture-key')
+  expect(await page.evaluate(() => localStorage.getItem('local-llm-deploy.gateway-api-key'))).toBe('fixture-key')
   await workspace.getByRole('button', { name: '访问设置 · 已设置' }).click()
   await page.getByRole('button', { name: '清除凭据', exact: true }).click()
   await expect(workspace.getByText('私有测试消息', { exact: true })).toHaveCount(0)

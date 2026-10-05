@@ -13,7 +13,7 @@
 - `/monitor-api/v1/*` 完整监控快照和模型详情。
 - `/services/<key>/*` 外部 HTTP 服务反代。
 
-仅 `GET/HEAD /api/models` 和 `/api/system` 作为明确的只读监控例外。监控页面支持在当前页面内存输入 Key；Key 不写入静态资源、URL 或浏览器持久存储。
+仅 `GET/HEAD /api/models` 和 `/api/system` 作为明确的只读监控例外。监控和对话页手动输入的 API Key 保存在该浏览器来源的本地存储中，刷新后优先读取，可再修改或清除；不写入静态资源或 URL。本机自动连接使用的临时会话不会写入这份存储。
 
 `type: app` 条目登记网关应用入口，与 `type: proxy` 的 `/services/<key>/` 分开。未登记的前缀不挂载。`/knowledge/` 保持独立凭据语义：转发知识库客户端 Authorization，不用模型 Key 覆盖。
 
