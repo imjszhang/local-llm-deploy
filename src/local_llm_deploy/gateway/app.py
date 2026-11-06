@@ -19,6 +19,7 @@ from .app_registry import AppRegistrationStore, load_mounted_apps
 from .apps import (knowledge_backend_url, knowledge_timeout, knowledge_upstream,
                    match_app, matches_prefix, rewrite_legacy, slash_redirect)
 from .home import render_home
+from .mounted_auth import MountedAppAuth, enabled as mounted_auth_enabled, SESSION as APP_SESSION
 from .auth import ApiAuth, BackendAuthError, ConsoleSessions, backend_credentials
 from .chat_store import ChatStore, MAX_BYTES as CHAT_MAX_BYTES, chat_target, parse_payload
 from .discovery import Discovery
@@ -70,6 +71,7 @@ class GatewayContext:
         self.transport = transport or Transport(self.settings)
         self.auth = auth or ApiAuth(self.paths.api_key)
         self.console_sessions = ConsoleSessions(self.auth)
+        self.mounted_auth = MountedAppAuth(self.auth)
         self.chat_store = ChatStore(self.paths)
         self.monitoring = monitoring or Monitoring(self.discovery, self.scheduler, self.settings)
         self.monitor_api = monitor_api or MonitorAPI(self)
@@ -218,6 +220,10 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 return super().handle_expect_100()
             app, _mode = match_app(self.path, self.context.apps)
             path = urlsplit(self.path if app is not None else normalize_proxy_path(self.path)).path
+            if app is not None and mounted_auth_enabled(app):
+                target = knowledge_backend_url(self.path, app.upstream.rstrip('/'), app.prefix)
+                if urlsplit(target).path != APP_SESSION:
+                    self.context.mounted_auth.headers(self, app, target, None)
             if app is not None and self._known_console_authorization():
                 raise RoutingError(401, f'Console session does not authorize {app.kind} requests')
             if path == '/console-api' or path.startswith('/console-api/'):
@@ -395,6 +401,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 rows = [{
                     'key': spec.key, 'alias': spec.alias, 'kind': spec.kind,
                     'prefix': spec.prefix, 'endpoint': spec.endpoint, 'upstream': spec.upstream,
+                    'auth': spec.raw.get('auth'),
                 } for spec in store.list_registered().values()]
                 self._json(writer, {'apps': sorted(rows, key=lambda row: row['key'])})
                 return
@@ -411,6 +418,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 self._json(writer, {
                     'key': spec.key, 'alias': spec.alias, 'kind': spec.kind,
                     'prefix': spec.prefix, 'endpoint': spec.endpoint, 'upstream': spec.upstream,
+                    'auth': spec.raw.get('auth'),
                 })
                 return
             if self.command == 'DELETE':
@@ -479,11 +487,20 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     )
                     return
                 if app.kind == 'http':
+                    target = knowledge_backend_url(self.path, app.upstream.rstrip('/'), app.prefix)
+                    if mounted_auth_enabled(app) and urlsplit(target).path == APP_SESSION:
+                        ctx.mounted_auth.session(self, writer, app)
+                        return
+                    # Authenticate before reading potentially large request bodies.
+                    if mounted_auth_enabled(app):
+                        ctx.mounted_auth.headers(self, app, target, None)
                     body = self._body()
+                    headers = (ctx.mounted_auth.headers(self, app, target, body)
+                               if mounted_auth_enabled(app) else dict(self.headers))
                     ctx.transport.forward(
                         self, writer,
-                        knowledge_backend_url(self.path, app.upstream.rstrip('/'), app.prefix),
-                        self.command, body, dict(self.headers),
+                        target,
+                        self.command, body, headers,
                         timeout=app.timeout if app.timeout is not None else ctx.settings.api_timeout,
                     )
                     return

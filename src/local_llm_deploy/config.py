@@ -323,6 +323,9 @@ def normalize_app(key: str, value: Any) -> AppSpec:
         upstream = _absolute_http_url(key, "upstream", cfg.get("upstream"))
     elif cfg.get("upstream") not in (None, ""):
         raise ConfigError(f"{key}: {kind} 不能声明 upstream")
+    if "auth" in cfg and cfg["auth"] is not None:
+        if kind != "http" or cfg["auth"] != {"gateway": "console", "upstream": "signed-v1"}:
+            raise ConfigError(f"{key}: HTTP app auth must use console and signed-v1")
     timeout = cfg.get("timeout")
     if timeout is not None and (not _finite_number(timeout) or timeout <= 0):
         raise ConfigError(f"{key}: timeout 必须是有限正数")
