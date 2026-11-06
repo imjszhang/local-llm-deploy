@@ -19,7 +19,22 @@ from local_llm_deploy.gateway.settings import GatewaySettings
 class Upstream(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
+    def do_HEAD(self):
+        self.do_GET()
+
     def do_GET(self):
+        if self.path == '/media/clip.mp4?download=1':
+            self.send_response(206)
+            self.send_header('Content-Type', 'video/mp4')
+            self.send_header('Content-Range', 'bytes 4-7/12')
+            self.send_header('Accept-Ranges', 'bytes')
+            self.send_header('Content-Disposition', 'attachment; filename="clip.mp4"')
+            self.send_header('Content-Length', '4')
+            self.send_header('X-Upstream-Range', self.headers.get('Range', ''))
+            self.end_headers()
+            if self.command != 'HEAD':
+                self.wfile.write(b'4567')
+            return
         payload = json.dumps({'path': self.path, 'authorization': self.headers.get('Authorization')}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -106,6 +121,27 @@ class AppRegistrationGatewayTests(unittest.TestCase):
         self.assertNotIn('href="/monitor.html"', page)
         self.assertNotIn('192.168.0.20', page)
         self.assertNotIn('secret', page)
+
+    def test_media_range_head_and_download_survive_http_mount(self):
+        status, _ = self.request('/gateway-api/v1/apps/video-remake', {
+            'alias': 'Video Remake', 'prefix': '/remake', 'upstream': self.url,
+        }, method='PUT')
+        self.assertEqual(status, 200)
+        for method in ('GET', 'HEAD'):
+            with self.subTest(method=method):
+                connection = http.client.HTTPConnection('127.0.0.1', self.gateway.server_port, timeout=2)
+                # Playback is an application request, not a model API request.
+                connection.request(method, '/remake/media/clip.mp4?download=1',
+                                   headers={'Range': 'bytes=4-7'})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 206)
+                self.assertEqual(response.getheader('Content-Type'), 'video/mp4')
+                self.assertEqual(response.getheader('Content-Range'), 'bytes 4-7/12')
+                self.assertEqual(response.getheader('Accept-Ranges'), 'bytes')
+                self.assertEqual(response.getheader('Content-Disposition'), 'attachment; filename="clip.mp4"')
+                self.assertEqual(response.getheader('X-Upstream-Range'), 'bytes=4-7')
+                self.assertEqual(response.read(), b'4567' if method == 'GET' else b'')
+                connection.close()
 
     def test_registration_requires_api_key_and_rejects_reserved_prefix(self):
         self.assertEqual(self.request('/gateway-api/v1/apps', headers={'Authorization': ''})[0], 401)

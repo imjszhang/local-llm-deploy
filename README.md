@@ -112,6 +112,7 @@ docs/                 部署、开发、架构、升级与验收文档
 - [验证记录](docs/validation.md)
 - [重构计划](docs/refactoring-plan.md)
 - [监控控制台实施与验收](docs/monitor-ui-plan.md)
+- [Video Remake 视频工作台接入](docs/video-remake.md)
 
 ### 本地模型对话
 
