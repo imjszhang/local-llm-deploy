@@ -21,13 +21,11 @@ def is_service_path(path):
 
 def parse_service_request(path):
     parsed = urlsplit(path)
-    parts = [part for part in parsed.path.split("/") if part != ""]
-    if not parts or parts[0] != "services":
+    parts = parsed.path.split("/", 3)
+    if len(parts) < 3 or parts[1] != "services" or not parts[2]:
         return None, None
-    if len(parts) == 1:
-        return None, None
-    key = parts[1]
-    remainder = "/" + "/".join(parts[2:]) if len(parts) > 2 else "/"
+    key = parts[2]
+    remainder = "/" + parts[3] if len(parts) > 3 else "/"
     query = "?" + parsed.query if parsed.query else ""
     return key, remainder + query
 

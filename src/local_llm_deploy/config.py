@@ -250,8 +250,9 @@ def normalize_proxy(key: str, value: Any) -> ProxySpec:
         raise ConfigError(f"{key}: auth.console 必须是布尔值")
     if "websocket" in cfg and type(cfg["websocket"]) is not bool:
         raise ConfigError(f"{key}: websocket 必须是布尔值")
-    if cfg.get("websocket"):
-        raise ConfigError(f"{key}: websocket 本期必须为 false")
+    for option in ("browser", "health_check"):
+        if option in cfg and type(cfg[option]) is not bool:
+            raise ConfigError(f"{key}: {option} 必须是布尔值")
     max_body = cfg.get("max_body_bytes")
     if max_body is not None and (type(max_body) is not int or isinstance(max_body, bool) or max_body <= 0):
         raise ConfigError(f"{key}: max_body_bytes 必须是正整数")
@@ -266,7 +267,7 @@ def normalize_proxy(key: str, value: Any) -> ProxySpec:
     return ProxySpec(
         key, alias, upstream, health_path, None if timeout is None else float(timeout),
         bool(cfg.get("strip_prefix", True)), tuple(item.upper() for item in methods), paths,
-        gateway, upstream_auth, console, False, max_body, cfg,
+        gateway, upstream_auth, console, bool(cfg.get("websocket", False)), max_body, cfg,
     )
 
 

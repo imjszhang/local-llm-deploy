@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -16,7 +17,7 @@ from local_llm_deploy.config import ConfigError, ProjectPaths, normalize_models
 from local_llm_deploy.lifecycle import process
 from local_llm_deploy.lifecycle.launchd import plist_data
 from local_llm_deploy.lifecycle.manager import instance_lock, start_service, stop_service
-from local_llm_deploy.lifecycle.observe import observe_instances, process_identity, publish_pid, read_pid, write_pid
+from local_llm_deploy.lifecycle.observe import health_ready, observe_instances, process_identity, publish_pid, read_pid, write_pid
 from local_llm_deploy.lifecycle.types import LifecycleError, ProcessIdentity, ServiceSpec
 
 
@@ -293,6 +294,30 @@ raise SystemExit(foreground_service(s,p,models={}))
             loaded.assert_not_called()
             bootout.assert_not_called()
         self.assertIsNone(process_identity(identity.pid))
+
+    def test_health_ready_ignores_http_proxy(self):
+        import http.server
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b'{"status":"ok"}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args):
+                return
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with patch.dict(os.environ, {"http_proxy": "http://127.0.0.1:9", "https_proxy": "http://127.0.0.1:9",
+                                          "HTTP_PROXY": "http://127.0.0.1:9", "HTTPS_PROXY": "http://127.0.0.1:9",
+                                          "all_proxy": "http://127.0.0.1:9", "ALL_PROXY": "http://127.0.0.1:9"}, clear=False):
+                self.assertTrue(health_ready("127.0.0.1", port, "/health", timeout=2))
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":

@@ -103,7 +103,7 @@ Chat 默认并发 1；Embedding 为 2；Rerank 和 ASR 各为 1。Embedding 内�
 
 `type: app` 与 `type: proxy` 写在同一张 `models.json` 里，但进入独立的 `AppSpec` 目录，不进入 `normalize_models()`、`/v1/models`、对话 lane 或 snapshot `services`。未登记的前缀不挂载。`kind: knowledge` 只反向代理外部知识库，转发客户端 Authorization。`kind: video` 在网关进程内挂载 `yt-study-archive`：读 `~/.yt-study-archive` 的目录库和成片，写操作转给该仓库的 CLI。不另开 3100，也不走 `/services/` 反代。旧路径 `/archive/` 仅在 video 声明 `legacy_prefixes` 时 301 到 `/video/`。
 
-`type: proxy` 与 `ModelSpec` 写在同一张 `models.json` 里，但不进入 `normalize_models()`、`/v1/models` 或对话 lane。网关只做鉴权、路径白名单和 HTTP 转发；探活走 TCP + `health_path`，不占用 Scheduler。入口为 `/services/<key>/`。本期不提供 WebSocket 隧道，浏览器完整页仍直连上游。
+`type: proxy` 与 `ModelSpec` 写在同一张 `models.json` 里，但不进入 `normalize_models()`、`/v1/models` 或对话 lane。网关只做鉴权、路径白名单和 HTTP 转发；探活走 TCP + `health_path`，不占用 Scheduler。入口为 `/services/<key>/`。可选 `websocket: true` 提供有界缓冲的双向隧道，`browser: true` 提供浏览器登录和服务范围 cookie，`health_check: false` 允许直接透传而不以探活结果作为前置条件。ComfyUI 示例启用这些选项，网页通过服务前缀访问。
 
 ### 对话工作区
 

@@ -155,7 +155,9 @@ def health_ready(host: str, port: int, path: str = "/health", *, timeout: float 
     authority = f"[{connect_host}]" if ":" in connect_host else connect_host
     try:
         req = urllib.request.Request(f"http://{authority}:{port}{path}", headers=headers or {})
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        # A system HTTP proxy, including a stopped local proxy, must not hide a listener on this machine.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=timeout) as response:
             if not 200 <= response.status < 300:
                 return False
             raw = response.read(65536)

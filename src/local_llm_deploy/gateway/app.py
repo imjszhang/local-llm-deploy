@@ -25,6 +25,8 @@ from .discovery import Discovery
 from .video import VideoApp
 from .proxies import (ProxyCatalog, is_service_path, parse_service_request, path_allowed,
                       service_backend_url)
+from .service_browser import (ServiceWriter, asset_redirect, browser_authorized, session_cookie, upstream_headers)
+from .websocket import forward_websocket
 from .monitoring import Monitoring
 from .monitor_api import MonitorAPI, monitor_target
 from .routing import Router, RoutingError, normalize_proxy_path
@@ -322,20 +324,17 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         return self.headers.get('Upgrade', '').lower() == 'websocket'
 
     def _service_headers(self, spec):
-        headers = dict(self.headers)
-        if spec.auth_upstream == 'none':
-            headers = {key: value for key, value in headers.items() if key.lower() != 'authorization'}
-        return headers
+        return upstream_headers(self, spec)
 
     def _service_target(self, request_path):
         ctx = self.context
         ctx.refresh()
-        if self._websocket_requested():
-            raise RoutingError(501, 'WebSocket proxying is not supported')
         key, remainder = parse_service_request(request_path)
         spec = None if key is None else ctx.proxies.get(key)
         console = self._known_console_authorization()
-        if spec is not None and spec.auth_console and console:
+        if spec is not None and browser_authorized(self, spec):
+            pass
+        elif spec is not None and spec.auth_console and console:
             pass
         elif not self._authorized(urlsplit(request_path).path):
             raise RoutingError(401, 'Invalid API key', code='invalid_request_error')
@@ -343,21 +342,48 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             raise RoutingError(401, 'Console session does not authorize service requests')
         if spec is None:
             raise RoutingError(404, 'Unknown service endpoint')
+        if self._websocket_requested() and not spec.websocket:
+            raise RoutingError(501, 'WebSocket proxying is not enabled for this service')
         if self.command not in spec.methods:
             raise RoutingError(405, 'Method not allowed')
         if not path_allowed(spec.paths, remainder):
             raise RoutingError(404, 'Unknown service endpoint')
-        if ctx.proxy_catalog.availability(key) != 'healthy':
+        if spec.raw.get('health_check', True) and ctx.proxy_catalog.availability(key) != 'healthy':
             raise RoutingError(503, 'Service is not ready')
         return spec, remainder
 
     def _dispatch_service(self, writer, request_path):
         ctx = self.context
-        spec, remainder = self._service_target(request_path)
-        body = self._body(spec.max_body_bytes)
+        try:
+            spec, remainder = self._service_target(request_path)
+        except RoutingError as exc:
+            key, _ = parse_service_request(request_path)
+            spec = ctx.proxies.get(key)
+            if exc.status == 401 and spec is not None and spec.raw.get('browser'):
+                self.close_connection = True
+                writer.start(401, {'WWW-Authenticate': 'Basic realm="Gateway service", charset="UTF-8"',
+                                   'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store'})
+                writer.write('请登录：用户名任意，密码为网关 API Key。'.encode())
+                writer.finish()
+                return
+            raise
+        cookie = None
+        if spec.raw.get('browser') and self.headers.get('Authorization', '').startswith('Basic '):
+            cookie = session_cookie(self, spec)
+        writer = ServiceWriter(writer, spec, cookie)
+        if urlsplit(request_path).path == spec.prefix and self.command in ('GET', 'HEAD'):
+            writer.start(308, {'Location': './' + spec.key + '/' +
+                              ('?' + urlsplit(request_path).query if urlsplit(request_path).query else '')})
+            writer.finish()
+            return
         timeout = spec.timeout if spec.timeout is not None else ctx.settings.api_timeout
-        ctx.transport.forward(self, writer, service_backend_url(spec, remainder),
-                              self.command, body, self._service_headers(spec), timeout=timeout)
+        target = service_backend_url(spec, parse_service_request(self.path)[1])
+        headers = self._service_headers(spec)
+        if self._websocket_requested():
+            forward_websocket(self, writer, target, headers, ctx.settings, timeout)
+            return
+        body = self._body(spec.max_body_bytes)
+        ctx.transport.forward(self, writer, target, self.command, body, headers, timeout=timeout)
 
     def _dispatch_registered_apps(self, writer, path):
         if not self._authorized(path) or self._known_console_authorization():
@@ -521,6 +547,11 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                         self.send_header('Content-Length', '0')
                         self.end_headers()
                         return
+                location = asset_redirect(self, ctx.proxies)
+                if location and not os.path.isfile(self.translate_path(self.path)):
+                    writer.start(307, {'Location': location, 'Cache-Control': 'no-store', 'Vary': 'Referer'})
+                    writer.finish()
+                    return
                 if path in ('/', '/index.html', '/monitor.html'):
                     self._static_cache_control = 'no-cache'
                 elif re.fullmatch(r'/monitor-assets/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8,}\.(?:js|css|svg|png|webp|woff2?)', path):

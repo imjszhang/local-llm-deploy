@@ -63,7 +63,9 @@ class ProxyRegistryTests(unittest.TestCase):
             {"methods": ["TRACE"]},
             {"auth": {"gateway": "none"}},
             {"auth": {"upstream": "basic"}},
-            {"websocket": True},
+            {"websocket": "true"},
+            {"browser": 1},
+            {"health_check": "false"},
             {"timeout": 0},
             {"max_body_bytes": True},
         ):

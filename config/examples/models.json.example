@@ -142,14 +142,23 @@
     "health_path": "/system_stats",
     "timeout": 120,
     "strip_prefix": true,
-    "methods": ["GET", "HEAD", "POST", "PUT", "DELETE"],
-    "paths": ["/prompt", "/queue", "/history", "/view", "/upload/image", "/object_info", "/system_stats"],
+    "methods": [
+      "GET",
+      "HEAD",
+      "POST",
+      "PUT",
+      "DELETE",
+      "PATCH",
+      "OPTIONS"
+    ],
     "auth": {
       "gateway": "api_key",
       "upstream": "none",
       "console": false
     },
-    "websocket": false
+    "websocket": true,
+    "browser": true,
+    "health_check": false
   },
   "knowledge": {
     "type": "app",

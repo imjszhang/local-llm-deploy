@@ -23,7 +23,7 @@
 
 应用也可以自行登记一个和知识库同类的 HTTP 入口。`PUT /gateway-api/v1/apps/<键>` 使用模型 API Key，正文为 `alias`、`prefix`、`upstream`；网关把 `/prefix/` 反代到该上游并转发客户端 Authorization。记录写在被忽略的 `data/gateway-apps.json`，不进入 Git。`DELETE` 同一路径即卸下。`./manage.sh apps list|remove` 管理这份本机登记。`kind` 仍只有 `knowledge`、`video` 能使用各自的专用实现；自行注册固定为 `http`，不能覆盖 `models.json` 里已有的键或路径。
 
-`/services/<key>/` 使用模型 API Key；默认不转发 `Authorization`（`auth.upstream=none`），控制台 session 不能当业务凭证。`Upgrade: websocket` 返回 501。未探活返回 503，未知键或未允许路径返回 404。这些键不出现在 `GET /v1/models`。
+`/services/<key>/` 使用模型 API Key；默认不转发 `Authorization`（`auth.upstream=none`），控制台 session 不能当业务凭证。`websocket: true` 开启 WebSocket 双向透传，否则升级请求返回 501。默认未探活返回 503；`health_check: false` 跳过转发前探活，直接访问上游。未知键或未允许路径返回 404。这些键不出现在 `GET /v1/models`。
 
 网关入口 Key 与后端 Key 可以不同。转发和健康探测按“运行实例记录的 `api_key_file` → 模型 `runtime.api_key_file` → 项目 `.api-key`”读取后端凭据；PID 只记录文件引用和来源。通过 `--api-key` / `API_KEY` 启动的内联密钥不能由另一个网关进程可靠恢复，直连仍可使用，代理会返回不可用诊断；需要代理时改用 `--api-key-file` / `API_KEY_FILE`，或配置 `runtime.api_key_file` 后重新启动。缺失凭据文件也会显示在监控 `unavailable_backends` 中，不向客户端暴露密钥。
 
@@ -135,3 +135,13 @@ SSE 发送头前可返回 HTTP 错误；发送保活头后按对应协议返回�
 ## TTS 语音合成
 
 `POST /v1/audio/speech` 接收 `model`、`input`、`ref_audio_base64`、`ref_text`、`language`、`response_format: "wav"`。字段约束和调用脚本见 [Qwen3-TTS 部署](qwen3-tts-deployment.md)。这是项目扩展，首版不支持音频流，`stream:true` 返回 400。默认模型按注册表 `default_for:["tts"]` 或 `DEFAULT_TTS_MODEL` 选择；独立 TTS lane 默认并发 1，可通过 `TTS_LANE_CONCURRENT` 设置。
+
+### ComfyUI 网页与完整接口
+
+ComfyUI 示例配置使用完整代理：不设置 `paths` 白名单，允许 GET、HEAD、POST、PUT、DELETE、PATCH、OPTIONS，开启 `websocket: true`、`browser: true`，设置 `health_check: false`。监控仍可独立探活，但探活结果不阻止请求。
+
+访问 `http://网关地址:8888/services/comfyui/`。首次访问浏览器弹出登录框，用户名任意，密码填写网关 API Key（项目 `.api-key`）。网关发放 12 小时、HttpOnly、SameSite=Strict、仅限该服务路径的签名 cookie，供资源、API、WebSocket 使用；更换 API Key 后 cookie 失效。程序客户端继续使用 Bearer Key。网关登录凭据及会话 cookie 不转发给 ComfyUI。
+
+`/services/comfyui` 自动跳到带尾斜杠的入口。转发去掉服务前缀，保留查询参数与编码后的文件路径；上游根路径重定向和 cookie Path 会映射回服务前缀。支持工作流提交、队列、历史、上传下载、扩展接口以及 `/ws` 文本/二进制消息。响应正文不改写。对于带同源服务页 Referer 的 `/assets/` 请求，在不覆盖网关已有文件的前提下跳回该服务前缀，兼容进度图标等绝对资源地址。官方前端使用相对资源和根据当前路径生成的 API/WS 地址；第三方插件若硬编码站点根路径或上游地址，仍需修正插件的 URL 配置。
+
+请求体大小默认受 `MAX_REQUEST_BODY_BYTES`（64 MiB）限制，可用该服务的 `max_body_bytes` 单独覆盖。`timeout` 用于 HTTP 请求及 WebSocket 握手；升级成功后的空闲 WebSocket 不按 HTTP 超时关闭。
