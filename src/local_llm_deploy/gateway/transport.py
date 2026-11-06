@@ -65,16 +65,20 @@ class ResponseWriter:
         self.finished = False
         self.status = None
         self.chunked = False
+        self.fixed_length = False
         self.outcome = None
 
-    def start(self, status, headers=None):
+    def start(self, status, headers=None, *, content_length=None):
         if self.started:
             return
         self.started, self.status = True, status
         self.handler.send_response(status)
         for name, value in end_to_end_headers(headers or {}, multi=True):
             self.handler.send_header(name, value)
-        self.chunked = self.handler.command != 'HEAD' and status not in (204, 304) and status >= 200
+        self.fixed_length = content_length is not None
+        if self.fixed_length:
+            self.handler.send_header('Content-Length', str(content_length))
+        self.chunked = not self.fixed_length and self.handler.command != 'HEAD' and status not in (204, 304) and status >= 200
         if self.chunked:
             self.handler.send_header('Transfer-Encoding', 'chunked')
         self.handler.end_headers()
@@ -84,9 +88,9 @@ class ResponseWriter:
         self.start(200, {'Content-Type': content_type, 'Cache-Control': 'no-cache'})
 
     def write(self, data):
-        if not data or self.handler.command == 'HEAD' or not self.chunked:
+        if not data or self.handler.command == 'HEAD' or not (self.chunked or self.fixed_length):
             return
-        self.handler.wfile.write(f'{len(data):x}\r\n'.encode() + data + b'\r\n')
+        self.handler.wfile.write(f'{len(data):x}\r\n'.encode() + data + b'\r\n' if self.chunked else data)
         self.handler.wfile.flush()
 
     def finish(self):

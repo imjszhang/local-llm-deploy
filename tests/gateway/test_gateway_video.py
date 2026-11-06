@@ -185,6 +185,30 @@ class VideoGatewayTests(unittest.TestCase):
         self.assertEqual(json.loads(payload)['video']['videoId'], 'newid123456')
         self.assertEqual(self.calls, [['add', 'https://youtu.be/aaaaaaaaaaa']])
 
+    def test_download_variants_head_and_ranges(self):
+        dest = self.home / 'library' / 'videos' / 'dQw4w9WgXcQ'
+        (dest / 'video.zh.burn.mp4').write_bytes(b'burned-zh')
+        connection = sqlite3.connect(self.home / 'catalog.db')
+        connection.execute('UPDATE videos SET title=?', ('中文/标题"\r\n',))
+        connection.commit()
+        connection.close()
+        url = '/video/api/v1/videos/dQw4w9WgXcQ/download?variant=burn'
+        status, data, headers = self.request(url)
+        self.assertEqual((status, data), (200, b'burned-zh'))
+        self.assertEqual(headers['Content-Length'], '9')
+        self.assertNotIn('Transfer-Encoding', headers)
+        self.assertIn("filename*=UTF-8''%E4%B8%AD", headers['Content-Disposition'])
+        self.assertIn('attachment;', headers['Content-Disposition'])
+        status, data, headers = self.request(url, method='HEAD')
+        self.assertEqual((status, data, headers['Content-Length']), (200, b'', '9'))
+        for value, expected, code in [('bytes=-2', b'zh', 206), ('bytes=7-999', b'zh', 206), ('bytes=99-', b'', 416), ('bytes=-', b'', 416)]:
+            status, data, headers = self.request(url, headers={'Range': value})
+            self.assertEqual((status, data), (code, expected))
+        self.assertEqual(self.request(url.replace('burn', 'soft'))[0], 404)
+        self.assertEqual(self.request(url.replace('burn', 'nope'))[0], 400)
+        status, data, headers = self.request(url.split('?')[0])
+        self.assertEqual((status, data), (200, b'media-bytes-xx'))
+
     def test_legacy_archive_redirects(self):
         status, _, headers = self.request('/archive?x=1')
         self.assertEqual(status, 301)

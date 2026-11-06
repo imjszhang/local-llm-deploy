@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import sqlite3
 import subprocess
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, quote
 
 from .apps import app_remainder, video_home, video_node, video_root
 from .routing import RoutingError
@@ -314,30 +314,41 @@ def _json(writer, status, payload):
     writer.finish()
 
 
-def _send_file(handler, writer, path, content_type):
-    data = path.read_bytes()
-    size = len(data)
-    extra = {'Accept-Ranges': 'bytes', 'Content-Type': content_type, **CORS}
-    range_header = handler.headers.get('Range') if handler is not None else None
-    start, end, status = 0, size - 1, 200
-    if range_header:
-        match = re.fullmatch(r'bytes=(\d*)-(\d*)', range_header.strip())
-        if not match:
-            writer.start(416, {**extra, 'Content-Range': f'bytes */{size}'})
-            writer.finish()
-            return
-        start = int(match.group(1) or 0)
-        end = int(match.group(2) or size - 1)
-        if start > end or start >= size:
-            writer.start(416, {**extra, 'Content-Range': f'bytes */{size}'})
-            writer.finish()
-            return
-        status = 206
-        extra['Content-Range'] = f'bytes {start}-{end}/{size}'
-    payload = data[start:end + 1]
-    writer.start(status, extra)
-    writer.write(payload)
-    writer.finish()
+def _send_file(handler, writer, path, content_type, disposition=None):
+    with path.open('rb') as stream:
+        size = os.fstat(stream.fileno()).st_size
+        extra = {'Accept-Ranges': 'bytes', 'Content-Type': content_type, **CORS}
+        if disposition:
+            extra['Content-Disposition'] = disposition
+        range_header = handler.headers.get('Range') if handler is not None else None
+        start, end, status = 0, size - 1, 200
+        if range_header:
+            match = re.fullmatch(r'bytes=(\d*)-(\d*)', range_header.strip())
+            if not match or not any(match.groups()):
+                writer.start(416, {**extra, 'Content-Range': f'bytes */{size}', 'Content-Length': '0'})
+                writer.finish()
+                return
+            first, last = match.groups()
+            start = int(first) if first else max(0, size - int(last))
+            end = min(int(last), size - 1) if first and last else size - 1
+            if start > end or start >= size:
+                writer.start(416, {**extra, 'Content-Range': f'bytes */{size}', 'Content-Length': '0'})
+                writer.finish()
+                return
+            status = 206
+            extra['Content-Range'] = f'bytes {start}-{end}/{size}'
+        remaining = max(0, end - start + 1)
+        extra['Content-Length'] = str(remaining)
+        writer.start(status, extra, content_length=remaining)
+        if handler is None or handler.command != 'HEAD':
+            stream.seek(start)
+            while remaining:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                writer.write(chunk)
+                remaining -= len(chunk)
+        writer.finish()
 
 
 def _query(remainder):
@@ -397,6 +408,32 @@ class VideoApp:
         return payload.get('data', payload)
 
     def dispatch(self, handler, writer, request_path, method, body, headers):
+        remainder = app_remainder(request_path, self.prefix)
+        pathname = remainder.split('?', 1)[0] or '/'
+        if pathname.rstrip('/') == '/mcp':
+            from .video_mcp import dispatch
+            dispatch(self, handler, writer, method, body)
+            return
+        if pathname == '/api/v1/mcp.json' and method == 'GET':
+            from .video_mcp import connection_info
+            _json(writer, 200, connection_info(handler, self))
+            return
+        asset_match = re.fullmatch(r'/api/v1/videos/([A-Za-z0-9_-]{1,32})/assets/([A-Za-z0-9_-]{1,80})', pathname)
+        if asset_match and method in ('GET', 'HEAD'):
+            from .video_mcp import assets, stored_video
+            try:
+                video = stored_video(self, asset_match.group(1))
+            except ValueError as exc:
+                raise RoutingError(404, str(exc)) from exc
+            found = next((a for a in assets(self, video, self.prefix)
+                          if a['assetId'] == asset_match.group(2)), None)
+            if not found:
+                raise RoutingError(404, 'Asset not found')
+            filename = re.sub(r'[\x00-\x1f\x7f/\\:*?"<>|]', '_', found['filename'])
+            fallback = f"{video['videoId']}-{found['assetId']}{found['_path'].suffix}"
+            disposition = f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+            _send_file(handler, writer, found['_path'], found['mimeType'], disposition)
+            return
         if method == 'OPTIONS':
             writer.start(204, CORS)
             writer.finish()
@@ -481,7 +518,7 @@ class VideoApp:
                 'hint': 'node cli/yt.js worker --once',
             })
             return
-        media = re.fullmatch(r'/api/v1/videos/([^/]+)/(media|thumb)', pathname)
+        media = re.fullmatch(r'/api/v1/videos/([^/]+)/(media|thumb|download)', pathname)
         if media and method in ('GET', 'HEAD'):
             video_id, kind = media.group(1), media.group(2)
             if not SAFE_VIDEO_ID.match(video_id):
@@ -495,6 +532,13 @@ class VideoApp:
             path = resolve_media(self.home, video, kind, variant)
             if path is None:
                 raise RoutingError(404, 'Thumbnail not found' if kind == 'thumb' else 'Media not found')
-            _send_file(handler, writer, path, MIME.get(path.suffix.lower(), 'application/octet-stream'))
+            disposition = None
+            if kind == 'download':
+                title = re.sub(r'[\x00-\x1f\x7f/\\:*?"<>|]', '_', str(video.get('title') or video_id))[:100].strip() or video_id
+                suffix = '' if variant == 'source' else f'.{variant}'
+                fallback = f'{video_id}{suffix}{path.suffix}'
+                name = f'{title}-{fallback}'
+                disposition = f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
+            _send_file(handler, writer, path, MIME.get(path.suffix.lower(), 'application/octet-stream'), disposition)
             return
         raise RoutingError(404, 'Video route not found')
