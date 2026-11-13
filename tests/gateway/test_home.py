@@ -17,4 +17,9 @@ class HomePageTests(unittest.TestCase):
         self.assertIn('href="/services/civ2/"', page)
         self.assertIn('外部服务', page)
         self.assertNotIn('192.168.0.75', page)
+        secret = SimpleNamespace(alias='civ2agent', key='civ2', prefix='/services/civ2',
+                                 raw={'home_query': 'token=saved-token'})
+        hidden = render_home({}, {'civ2': secret}).decode()
+        self.assertIn('href="/services/civ2/?token=saved-token"', hidden)
+        self.assertIn('<code>/services/civ2/</code>', hidden)
         self.assertLess(page.index('civ2agent'), page.index('视频库'))

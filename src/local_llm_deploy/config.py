@@ -250,6 +250,9 @@ def normalize_proxy(key: str, value: Any) -> ProxySpec:
         raise ConfigError(f"{key}: auth.console 必须是布尔值")
     if "websocket" in cfg and type(cfg["websocket"]) is not bool:
         raise ConfigError(f"{key}: websocket 必须是布尔值")
+    home_query = cfg.get("home_query")
+    if home_query is not None and (not isinstance(home_query, str) or not re.fullmatch(r"[A-Za-z0-9._~-]+=[A-Za-z0-9._~-]+", home_query)):
+        raise ConfigError(f"{key}: home_query 必须是单个不含分隔符的查询参数")
     for option in ("browser", "health_check"):
         if option in cfg and type(cfg[option]) is not bool:
             raise ConfigError(f"{key}: {option} 必须是布尔值")

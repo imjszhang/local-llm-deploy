@@ -30,7 +30,10 @@ from .discovery import Discovery
 from .video import VideoApp
 from .proxies import (ProxyCatalog, is_service_path, parse_service_request, path_allowed,
                       service_backend_url)
-from .service_browser import (ServiceWriter, asset_redirect, browser_authorized, session_cookie, upstream_headers)
+from .service_browser import (
+    ServiceWriter, asset_redirect, bearer_is_gateway_key, browser_authorized, local_browser_navigation,
+    session_cookie, upstream_headers,
+)
 from .websocket import forward_websocket
 from .monitoring import Monitoring
 from .monitor_api import MonitorAPI, monitor_target
@@ -451,7 +454,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 return
             raise
         cookie = None
-        if spec.raw.get('browser') and self.headers.get('Authorization', '').startswith('Basic '):
+        if spec.raw.get('browser') and (
+                self.headers.get('Authorization', '').startswith('Basic ') or bearer_is_gateway_key(self) or
+                local_browser_navigation(self)):
             cookie = session_cookie(self, spec)
         writer = ServiceWriter(writer, spec, cookie)
         if urlsplit(request_path).path == spec.prefix and self.command in ('GET', 'HEAD'):

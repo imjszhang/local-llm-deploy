@@ -13,14 +13,13 @@ KIND_LABELS = {
 }
 
 
-def _card(alias: str, endpoint: str, label: str) -> str:
+def _card(alias: str, href: str, label: str, shown: str) -> str:
     safe_alias = html.escape(alias)
-    safe_endpoint = html.escape(endpoint, quote=True)
     return (
-        f'<a class="card" href="{safe_endpoint}">'
+        f'<a class="card" href="{html.escape(href, quote=True)}">'
         f'<span class="mark">{html.escape(alias[:1] or "A")}</span>'
         f'<span><strong>{safe_alias}</strong><em>{html.escape(label)}</em>'
-        f'<code>{html.escape(endpoint)}</code></span>'
+        f'<code>{html.escape(shown)}</code></span>'
         f'<span class="open">打开</span></a>'
     )
 
@@ -28,10 +27,13 @@ def _card(alias: str, endpoint: str, label: str) -> str:
 def render_home(apps, proxies=None) -> bytes:
     entries = []
     for spec in (apps or {}).values():
-        entries.append((spec.alias, spec.key, spec.endpoint, KIND_LABELS.get(spec.kind, spec.kind)))
+        entries.append((spec.alias, spec.key, spec.endpoint, spec.endpoint, KIND_LABELS.get(spec.kind, spec.kind)))
     for spec in (proxies or {}).values():
-        entries.append((spec.alias, spec.key, spec.prefix + '/', '外部服务'))
-    cards = [_card(alias, endpoint, label) for alias, _key, endpoint, label in sorted(entries)]
+        shown = spec.prefix + '/'
+        query = spec.raw.get('home_query') if isinstance(getattr(spec, 'raw', None), dict) else None
+        href = shown + (('?' + query) if query else '')
+        entries.append((spec.alias, spec.key, href, shown, '外部服务'))
+    cards = [_card(alias, href, label, shown) for alias, _key, href, shown, label in sorted(entries)]
     catalog = ''.join(cards) or '<p class="empty">还没有登记应用。知识库、视频库写在本机 models.json；其他 HTTP 应用可自行注册入口。</p>'
     page = f'''<!DOCTYPE html>
 <html lang="zh-CN">
@@ -66,6 +68,20 @@ def render_home(apps, proxies=None) -> bytes:
     <h2>应用</h2>
     <div class="grid">{catalog}</div>
   </main>
+  <script>
+    const storageKey = 'local-llm-deploy.gateway-api-key'
+    document.querySelectorAll('a.card[href^="/services/"]').forEach(link => {{
+      link.addEventListener('click', event => {{
+        let key = ''
+        try {{ key = (localStorage.getItem(storageKey) || '').trim() }} catch (error) {{ return }}
+        if (!key || key.length > 8192 || /[\\r\\n]/.test(key)) return
+        event.preventDefault()
+        const href = link.getAttribute('href')
+        fetch(href, {{ headers: {{ Authorization: 'Bearer ' + key }}, credentials: 'same-origin' }})
+          .finally(() => {{ location.href = href }})
+      }})
+    }})
+  </script>
 </body>
 </html>
 '''

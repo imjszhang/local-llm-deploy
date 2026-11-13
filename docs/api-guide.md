@@ -142,7 +142,7 @@ SSE 发送头前可返回 HTTP 错误；发送保活头后按对应协议返回�
 
 ComfyUI 示例配置使用完整代理：不设置 `paths` 白名单，允许 GET、HEAD、POST、PUT、DELETE、PATCH、OPTIONS，开启 `websocket: true`、`browser: true`，设置 `health_check: false`。监控仍可独立探活，但探活结果不阻止请求。
 
-访问 `http://网关地址:8888/services/comfyui/`。首次访问浏览器弹出登录框，用户名任意，密码填写网关 API Key（项目 `.api-key`）。网关发放 12 小时、HttpOnly、SameSite=Strict、仅限该服务路径的签名 cookie，供资源、API、WebSocket 使用；更换 API Key 后 cookie 失效。程序客户端继续使用 Bearer Key。网关登录凭据及会话 cookie 不转发给 ComfyUI。
+访问 `http://网关地址:8888/services/comfyui/`。从本机网关页面点开时直接使用当前网关 API Key，不再弹出用户名和密码。局域网浏览器若已保存该 Key，也会先用它换取服务 cookie；没有保存时才弹出登录框，用户名任意，密码填写网关 API Key（项目 `.api-key`）。网关发放 12 小时、HttpOnly、SameSite=Strict、仅限该服务路径的签名 cookie，供资源、API、WebSocket 使用；更换 API Key 后 cookie 失效。程序客户端继续使用 Bearer Key。网关登录凭据及会话 cookie 不转发给 ComfyUI。
 
 `/services/comfyui` 自动跳到带尾斜杠的入口。转发去掉服务前缀，保留查询参数与编码后的文件路径；上游根路径重定向和 cookie Path 会映射回服务前缀。支持工作流提交、队列、历史、上传下载、扩展接口以及 `/ws` 文本/二进制消息。响应正文不改写。对于带同源服务页 Referer 的站点根路径请求（例如 `/assets/`、`/play`、`/logout`），在不覆盖网关已有文件的前提下以 307 跳回该服务前缀。POST 因此仍交给上游。官方前端使用相对资源和根据当前路径生成的 API/WS 地址；第三方插件若硬编码站点根路径或上游地址，仍需修正插件的 URL 配置。
 

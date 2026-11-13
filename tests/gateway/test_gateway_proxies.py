@@ -211,6 +211,17 @@ class ServiceProxyTests(unittest.TestCase):
         self.assertEqual(status, 200)
         return headers['Set-Cookie'].split(';', 1)[0]
 
+    def test_local_navigation_uses_the_gateway_key_without_a_prompt(self):
+        self.enable_browser()
+        host = f'127.0.0.1:{self.gateway.server_port}'
+        status, _, headers = self.request('/services/tool/', headers={
+            'Authorization': '', 'Host': host,
+            'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Site': 'same-origin',
+        })
+        self.assertEqual(status, 200)
+        self.assertIn('gateway_service_', headers['Set-Cookie'])
+        self.assertNotIn('WWW-Authenticate', headers)
+
     def test_browser_login_cookie_resources_and_scope(self):
         self.enable_browser()
         status, _, headers = self.request('/services/tool/', headers={'Authorization': ''})

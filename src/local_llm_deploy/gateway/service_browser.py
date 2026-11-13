@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import secrets
 import ssl
 import time
@@ -28,9 +29,46 @@ def same_origin(handler):
     return parsed.scheme in ('http', 'https') and parsed.netloc == handler.headers.get('Host')
 
 
+def _single_header(headers, name):
+    values = headers.get_all(name, [])
+    return values[0] if len(values) == 1 else None
+
+
+def local_browser_navigation(handler):
+    """A person opening a service from this machine's own gateway page."""
+    headers = handler.headers
+    if any(name.lower() in ('forwarded', 'via', 'x-real-ip') or name.lower().startswith('x-forwarded-')
+           for name in headers):
+        return False
+    try:
+        peer = ipaddress.ip_address(handler.client_address[0])
+        if isinstance(peer, ipaddress.IPv6Address) and peer.ipv4_mapped:
+            peer = peer.ipv4_mapped
+        if not peer.is_loopback:
+            return False
+        host = headers.get('Host', '')
+        if not host or any(char.isspace() for char in host) or '%' in host:
+            return False
+        parsed = urlsplit('//' + host)
+        if (parsed.username is not None or parsed.password is not None or parsed.path or
+                parsed.query or parsed.fragment):
+            return False
+        if parsed.hostname != 'localhost' and not ipaddress.ip_address(parsed.hostname).is_loopback:
+            return False
+        if (80 if parsed.port is None else parsed.port) != handler.server.server_port:
+            return False
+    except (ValueError, TypeError):
+        return False
+    if _single_header(headers, 'Sec-Fetch-Mode') != 'navigate' or _single_header(headers, 'Sec-Fetch-Dest') != 'document':
+        return False
+    return _single_header(headers, 'Sec-Fetch-Site') in ('same-origin', 'none')
+
+
 def browser_authorized(handler, spec):
     if not spec.raw.get('browser') or not same_origin(handler):
         return False
+    if local_browser_navigation(handler):
+        return True
     key = handler.context.auth.key()
     if not key:
         return True
@@ -56,6 +94,19 @@ def browser_authorized(handler, spec):
         return hmac.compare_digest(signature, expected)
     except (KeyError, ValueError, CookieError):
         return False
+
+
+def bearer_is_gateway_key(handler):
+    authorization = handler.headers.get('Authorization', '')
+    if not authorization.startswith('Bearer '):
+        return False
+    token = authorization[7:]
+    if token.startswith('local-console.'):
+        return False
+    key = handler.context.auth.key()
+    if not key:
+        return False
+    return hmac.compare_digest(hashlib.sha256(token.encode()).digest(), hashlib.sha256(key.encode()).digest())
 
 
 def session_cookie(handler, spec):
