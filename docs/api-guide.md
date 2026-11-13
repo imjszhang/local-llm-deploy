@@ -11,6 +11,7 @@
 - 默认后端 `/api/*` 转发。
 - `/api/ollama/*` 原生推理及操作代理。
 - `/monitor-api/v1/*` 完整监控快照和模型详情。
+- `/agents-api/v1/snapshot` 本机探员会话快照。
 - `/services/<key>/*` 外部 HTTP 服务反代。
 
 仅 `GET/HEAD /api/models` 和 `/api/system` 作为明确的只读监控例外。监控和对话页手动输入的 API Key 保存在该浏览器来源的本地存储中，刷新后优先读取，可再修改或清除；不写入静态资源或 URL。本机自动连接使用的临时会话不会写入这份存储。
@@ -19,9 +20,9 @@
 
 `/video/` 在网关进程内直接读写本机 `yt-study-archive`，不另开 HTTP 端口，也不占用模型 Key。浏览免认证；入队/重试使用视频库自己的 Bearer token。控制台 session 不能当视频库凭证。旧路径 `/archive/` 仅在 video 声明 `legacy_prefixes` 时 301 到 `/video/`。
 
-运行监控是内置应用 `kind: monitor`，默认入口 `/monitor/`，页面里再进入模型对话。未在 `models.json` 声明时网关仍会挂上这一项；声明后可以改别名和前缀。旧地址 `/monitor.html` 在该应用存在时 301 到它的入口，并保留查询参数。
+运行监控是内置应用 `kind: monitor`，默认入口 `/monitor/`，页面里再进入模型对话。AI 探员总部是内置应用 `kind: agents`，默认入口 `/agents/`。这两项未在 `models.json` 声明时网关仍会挂上；声明后可以改别名和前缀。旧地址 `/monitor.html`、`/agents.html` 在对应应用存在时 301 到它的入口，并保留查询参数。本机打开页面时自动领取控制台会话，再用 `Authorization: Bearer local-console…` 和 `X-Local-Console: 1` 读取各自的 API。
 
-应用也可以自行登记一个和知识库同类的 HTTP 入口。`PUT /gateway-api/v1/apps/<键>` 使用模型 API Key，正文为 `alias`、`prefix`、`upstream`；网关把 `/prefix/` 反代到该上游并转发客户端 Authorization。记录写在被忽略的 `data/gateway-apps.json`，不进入 Git。`DELETE` 同一路径即卸下。`./manage.sh apps list|remove` 管理这份本机登记。`kind` 仍只有 `knowledge`、`video` 能使用各自的专用实现；自行注册固定为 `http`，不能覆盖 `models.json` 里已有的键或路径。
+应用也可以自行登记一个和知识库同类的 HTTP 入口。`PUT /gateway-api/v1/apps/<键>` 使用模型 API Key，正文为 `alias`、`prefix`、`upstream`；网关把 `/prefix/` 反代到该上游并转发客户端 Authorization。记录写在被忽略的 `data/gateway-apps.json`，不进入 Git。`DELETE` 同一路径即卸下。`./manage.sh apps list|remove` 管理这份本机登记。`kind` 里 `knowledge`、`video`、`monitor`、`agents` 使用各自的专用实现；自行注册固定为 `http`，不能覆盖 `models.json` 里已有的键或路径。
 
 `/services/<key>/` 使用模型 API Key；默认不转发 `Authorization`（`auth.upstream=none`），控制台 session 不能当业务凭证。`websocket: true` 开启 WebSocket 双向透传，否则升级请求返回 501。默认未探活返回 503；`health_check: false` 跳过转发前探活，直接访问上游。未知键或未允许路径返回 404。这些键不出现在 `GET /v1/models`。
 
@@ -43,6 +44,7 @@
 | `/knowledge/*` | `type: app` / `kind: knowledge`，外部知识库反代 | 不属于模型 API |
 | `/video/*` | `type: app` / `kind: video`，本机视频学习库 | 不属于模型 API |
 | `/monitor/` | `type: app` / `kind: monitor`，运行监控与模型对话 | 不属于模型 API |
+| `/agents/` | `type: app` / `kind: agents`，本机 AI 探员 | 不属于模型 API |
 | `/gateway-api/v1/apps` | 自行注册或卸下 `kind: http` 入口 | 不属于模型 API，要模型 Key |
 | `/services/<key>/*` | 登记为 `type: proxy` 的外部 HTTP 反代 | 不属于模型 API，不占 lane |
 
@@ -142,6 +144,6 @@ ComfyUI 示例配置使用完整代理：不设置 `paths` 白名单，允许 GE
 
 访问 `http://网关地址:8888/services/comfyui/`。首次访问浏览器弹出登录框，用户名任意，密码填写网关 API Key（项目 `.api-key`）。网关发放 12 小时、HttpOnly、SameSite=Strict、仅限该服务路径的签名 cookie，供资源、API、WebSocket 使用；更换 API Key 后 cookie 失效。程序客户端继续使用 Bearer Key。网关登录凭据及会话 cookie 不转发给 ComfyUI。
 
-`/services/comfyui` 自动跳到带尾斜杠的入口。转发去掉服务前缀，保留查询参数与编码后的文件路径；上游根路径重定向和 cookie Path 会映射回服务前缀。支持工作流提交、队列、历史、上传下载、扩展接口以及 `/ws` 文本/二进制消息。响应正文不改写。对于带同源服务页 Referer 的 `/assets/` 请求，在不覆盖网关已有文件的前提下跳回该服务前缀，兼容进度图标等绝对资源地址。官方前端使用相对资源和根据当前路径生成的 API/WS 地址；第三方插件若硬编码站点根路径或上游地址，仍需修正插件的 URL 配置。
+`/services/comfyui` 自动跳到带尾斜杠的入口。转发去掉服务前缀，保留查询参数与编码后的文件路径；上游根路径重定向和 cookie Path 会映射回服务前缀。支持工作流提交、队列、历史、上传下载、扩展接口以及 `/ws` 文本/二进制消息。响应正文不改写。对于带同源服务页 Referer 的站点根路径请求（例如 `/assets/`、`/play`、`/logout`），在不覆盖网关已有文件的前提下以 307 跳回该服务前缀。POST 因此仍交给上游。官方前端使用相对资源和根据当前路径生成的 API/WS 地址；第三方插件若硬编码站点根路径或上游地址，仍需修正插件的 URL 配置。
 
 请求体大小默认受 `MAX_REQUEST_BODY_BYTES`（64 MiB）限制，可用该服务的 `max_body_bytes` 单独覆盖。`timeout` 用于 HTTP 请求及 WebSocket 握手；升级成功后的空闲 WebSocket 不按 HTTP 超时关闭。

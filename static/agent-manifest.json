@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "entry": "agents.html",
+  "files": [
+    {
+      "path": "agent-assets/agents-Du9Munei.js",
+      "sha256": "e06774af0d4b3641cd0fbde0a593f7ee60ad69e0137535268a5cd3bb3174c764",
+      "bytes": 524349,
+      "gzip_bytes": 131240
+    },
+    {
+      "path": "agents.html",
+      "sha256": "04ed8890ac67de558615ee196db82129dc9e3419681239b8e873bcc7444a3375",
+      "bytes": 643,
+      "gzip_bytes": 431
+    }
+  ],
+  "gzip": {
+    "javascript": 131240,
+    "css": 0
+  }
+}

@@ -8,23 +8,30 @@ KIND_LABELS = {
     'knowledge': '知识库',
     'video': '本机视频库',
     'monitor': '运行监控与模型对话',
+    'agents': '本机 AI 探员',
     'http': '自行注册的应用',
 }
 
 
-def render_home(apps) -> bytes:
-    cards = []
-    for spec in sorted((apps or {}).values(), key=lambda item: (item.alias, item.key)):
-        label = html.escape(KIND_LABELS.get(spec.kind, spec.kind))
-        alias = html.escape(spec.alias)
-        endpoint = html.escape(spec.endpoint, quote=True)
-        cards.append(
-            f'<a class="card" href="{endpoint}">'
-            f'<span class="mark">{html.escape(spec.alias[:1] or "A")}</span>'
-            f'<span><strong>{alias}</strong><em>{label}</em>'
-            f'<code>{html.escape(spec.endpoint)}</code></span>'
-            f'<span class="open">打开</span></a>'
-        )
+def _card(alias: str, endpoint: str, label: str) -> str:
+    safe_alias = html.escape(alias)
+    safe_endpoint = html.escape(endpoint, quote=True)
+    return (
+        f'<a class="card" href="{safe_endpoint}">'
+        f'<span class="mark">{html.escape(alias[:1] or "A")}</span>'
+        f'<span><strong>{safe_alias}</strong><em>{html.escape(label)}</em>'
+        f'<code>{html.escape(endpoint)}</code></span>'
+        f'<span class="open">打开</span></a>'
+    )
+
+
+def render_home(apps, proxies=None) -> bytes:
+    entries = []
+    for spec in (apps or {}).values():
+        entries.append((spec.alias, spec.key, spec.endpoint, KIND_LABELS.get(spec.kind, spec.kind)))
+    for spec in (proxies or {}).values():
+        entries.append((spec.alias, spec.key, spec.prefix + '/', '外部服务'))
+    cards = [_card(alias, endpoint, label) for alias, _key, endpoint, label in sorted(entries)]
     catalog = ''.join(cards) or '<p class="empty">还没有登记应用。知识库、视频库写在本机 models.json；其他 HTTP 应用可自行注册入口。</p>'
     page = f'''<!DOCTYPE html>
 <html lang="zh-CN">

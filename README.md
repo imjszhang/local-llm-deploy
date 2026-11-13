@@ -29,7 +29,7 @@ python3 -m venv .venv
 ./manage.sh start serve-ui
 ```
 
-打开 [http://localhost:8888/](http://localhost:8888/) 进入应用首页，从这里打开知识库、视频库、运行监控和自行登记的入口。监控与模型对话在内置应用 `/monitor/`；旧地址 `/monitor.html` 会跳到那里。通过本机地址访问时自动连接，网关在服务端读取 `.api-key`，根 Key 不传入浏览器；远程访问通过“访问设置”输入凭据。模型对话工作区支持本地推理测试，在“测试设置”中按模型配置思考开关、推理强度与预算，详见 [思考控制](docs/chat-reasoning.md)。启动无需 Node；前端开发和构建见 [frontend/README.md](frontend/README.md)。
+打开 [http://localhost:8888/](http://localhost:8888/) 进入应用首页，从这里打开知识库、视频库、运行监控、AI 探员总部和自行登记的入口。监控与模型对话在内置应用 `/monitor/`，探员总部在 `/agents/`；旧地址 `/monitor.html`、`/agents.html` 会跳到对应入口。通过本机地址访问时自动连接，网关在服务端读取 `.api-key`，根 Key 不传入浏览器；远程访问通过“访问设置”输入凭据。模型对话工作区支持本地推理测试，在“测试设置”中按模型配置思考开关、推理强度与预算，详见 [思考控制](docs/chat-reasoning.md)。启动无需 Node；前端开发和构建见 [frontend/README.md](frontend/README.md)。
 
 ## 日常管理
 

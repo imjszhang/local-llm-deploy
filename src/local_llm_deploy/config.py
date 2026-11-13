@@ -271,11 +271,13 @@ def normalize_proxy(key: str, value: Any) -> ProxySpec:
     )
 
 
-APP_KINDS = ("knowledge", "video", "monitor", "http")
-SINGLETON_APP_KINDS = ("knowledge", "video", "monitor")
-DEFAULT_APP_PREFIXES = {"knowledge": "/knowledge", "video": "/video", "monitor": "/monitor"}
+APP_KINDS = ("knowledge", "video", "monitor", "agents", "http")
+SINGLETON_APP_KINDS = ("knowledge", "video", "monitor", "agents")
+DEFAULT_APP_PREFIXES = {
+    "knowledge": "/knowledge", "video": "/video", "monitor": "/monitor", "agents": "/agents",
+}
 RESERVED_APP_PREFIXES = (
-    "/services", "/v1", "/api", "/monitor-api", "/console-api", "/chat-api", "/gateway-api",
+    "/services", "/v1", "/api", "/monitor-api", "/agents-api", "/console-api", "/chat-api", "/gateway-api",
 )
 
 
@@ -301,7 +303,7 @@ def normalize_app(key: str, value: Any) -> AppSpec:
         raise ConfigError(f"{key}: 不是 app 条目")
     kind = cfg.get("kind")
     if kind not in APP_KINDS:
-        raise ConfigError(f"{key}: kind 必须是 knowledge、video、monitor 或 http")
+        raise ConfigError(f"{key}: kind 必须是 knowledge、video、monitor、agents 或 http")
     alias = cfg.get("alias") or key
     if not isinstance(alias, str) or not alias or any(c in alias for c in ("\n", "\r", "\x00")):
         raise ConfigError(f"{key}: alias 必须是非空字符串")
@@ -332,7 +334,7 @@ def normalize_app(key: str, value: Any) -> AppSpec:
     for field in ("home", "root", "node"):
         if field in cfg and cfg[field] not in (None, ""):
             _string_value(key, field, cfg[field], nonempty=True, controls=True)
-        if kind in ("knowledge", "http", "monitor") and cfg.get(field):
+        if kind in ("knowledge", "http", "monitor", "agents") and cfg.get(field):
             raise ConfigError(f"{key}: {kind} 不能声明 {field}")
     cfg["type"] = "app"
     cfg["kind"] = kind

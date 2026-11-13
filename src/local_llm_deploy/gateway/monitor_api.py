@@ -358,6 +358,11 @@ class MonitorAPI:
             if page.is_file():
                 return 'healthy', None
             return 'unready', 'Monitor page is not published'
+        if spec.kind == 'agents':
+            page = self.context.paths.static / 'agents.html'
+            if page.is_file():
+                return 'healthy', None
+            return 'unready', 'Agents page is not published'
         if spec.kind == 'video':
             from pathlib import Path
             from .apps import video_home, video_root

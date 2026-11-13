@@ -294,6 +294,10 @@ class ServiceProxyTests(unittest.TestCase):
             'Authorization': '', 'Referer': f'http://{host}/services/tool/'})
         self.assertEqual(status, 307)
         self.assertEqual(headers['Location'], '/services/tool/assets/images/progress.png')
+        status, _, headers = self.request('/play', method='POST', body=b'{"op":"run"}', headers={
+            'Authorization': '', 'Content-Type': 'application/json', 'Referer': f'http://{host}/services/tool/'})
+        self.assertEqual(status, 307)
+        self.assertEqual(headers['Location'], '/services/tool/play')
         self.assertEqual(self.request('/assets/images/progress.png', headers={
             'Referer': 'http://evil.example/services/tool/'})[0], 404)
         self.assertEqual(self.request('/v1/models', headers={

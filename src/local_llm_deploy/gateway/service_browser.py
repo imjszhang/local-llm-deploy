@@ -132,17 +132,25 @@ class ServiceWriter:
 
 
 def asset_redirect(handler, proxies):
-    """ComfyUI's progress favicon uses /assets despite its mounted base URL.
+    """A mounted service page may call site-root URLs such as /assets or /play.
 
-    Redirect only asset requests from a same-origin service page. Authentication
-    happens at the destination; never route arbitrary gateway APIs by Referer.
+    Redirect those requests back under the service prefix when the Referer is that
+    same-origin page. Authentication happens at the destination. Gateway API
+    prefixes are dispatched before this fallback, and an existing gateway file
+    is never replaced by the redirect.
     """
-    if handler.command not in ('GET', 'HEAD') or not handler.path.startswith('/assets/'):
+    if handler.command not in ('GET', 'HEAD', 'POST'):
+        return None
+    path = urlsplit(handler.path).path
+    if not path.startswith('/') or path.startswith('//') or path == '/':
         return None
     referrer = urlsplit(handler.headers.get('Referer', ''))
     if referrer.scheme not in ('http', 'https') or referrer.netloc != handler.headers.get('Host'):
         return None
     for spec in proxies.values():
-        if spec.raw.get('browser') and referrer.path.startswith(spec.prefix + '/'):
-            return spec.prefix + handler.path
+        prefix = spec.prefix
+        if spec.raw.get('browser') and (referrer.path == prefix or referrer.path.startswith(prefix + '/')):
+            if path == prefix or path.startswith(prefix + '/'):
+                return None
+            return prefix + handler.path
     return None

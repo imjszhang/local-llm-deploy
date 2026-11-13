@@ -161,6 +161,50 @@ class MonitorStaticTests(unittest.TestCase):
         finally:
             self.context.apps = previous
 
+    def test_agents_app_uses_the_same_entry_and_console_session(self):
+        from local_llm_deploy.config import normalize_app
+        previous = self.context.apps
+        spec = normalize_app('agents', {
+            'type': 'app', 'kind': 'agents', 'alias': 'AI 探员总部', 'prefix': '/agents',
+        })
+        self.context.apps = {**previous, 'agents': spec}
+        try:
+            expected = (self.paths.static / 'agents.html').read_bytes()
+            self.assertIn(b'id="agents-app"', expected)
+            status, headers, _ = self.request('/agents')
+            self.assertEqual(status, 301)
+            self.assertEqual(headers['Location'], '/agents/')
+            status, headers, body = self.request('/agents/')
+            self.assertEqual(status, 200)
+            self.assertEqual(body, expected)
+            self.assertEqual(headers['Cache-Control'], 'no-cache')
+            status, headers, body = self.request('/agents.html?demo=1')
+            self.assertEqual(status, 301)
+            self.assertEqual(headers['Location'], '/agents/?demo=1')
+            self.assertEqual(body, b'')
+            status, _, _ = self.request('/agents-api/v1/snapshot')
+            self.assertEqual(status, 401)
+            origin = f'http://127.0.0.1:{self.server.server_port}'
+            status, _, raw = self.request('/console-api/v1/session', 'POST', {
+                'Origin': origin,
+                'X-Local-Console': '1',
+            })
+            self.assertEqual(status, 200, raw)
+            token = json.loads(raw)['token']
+            status, headers, raw = self.request('/agents-api/v1/snapshot', headers={
+                'Origin': origin,
+                'X-Local-Console': '1',
+                'Authorization': 'Bearer ' + token,
+                'Sec-Fetch-Site': 'same-origin',
+            })
+            self.assertEqual(status, 200, raw)
+            snapshot = json.loads(raw)
+            self.assertEqual(snapshot['schema_version'], 1)
+            self.assertEqual(headers['Cache-Control'], 'no-store')
+            self.assertEqual({item['agent'] for item in snapshot['agents']}, {'claude-code', 'codex'})
+        finally:
+            self.context.apps = previous
+
     def test_python_serves_publication_without_node_or_any_subprocess(self):
         parser = AssetReferences()
         parser.feed((self.paths.static / 'monitor.html').read_text(encoding='utf-8'))

@@ -55,7 +55,7 @@ export interface MonitorService {
 export interface MonitorApp {
   key: string
   alias: string
-  kind: 'knowledge' | 'video' | 'monitor' | 'http'
+  kind: 'knowledge' | 'video' | 'monitor' | 'agents' | 'http'
   endpoint: string
   href: string
   availability: { state: 'healthy' | 'unready' | 'unauthorized' | 'unreachable' | 'unknown'; reason: string | null }

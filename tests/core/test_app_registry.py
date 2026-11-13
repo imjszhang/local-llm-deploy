@@ -10,6 +10,7 @@ from local_llm_deploy.config import (
     ConfigError, ProjectPaths, dump_registry, load_apps, load_catalog, load_models,
     normalize_app, normalize_models, normalize_registry,
 )
+from local_llm_deploy.gateway.app_registry import load_mounted_apps
 from tests.core.test_proxy_registry import proxy_cfg
 
 
@@ -81,6 +82,15 @@ class AppRegistryTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             normalize_app("notes", {"type": "app", "kind": "http", "alias": "笔记",
                                     "upstream": "http://127.0.0.1:19000"})
+
+    def test_builtin_monitor_and_agents_mount_without_a_registry_entry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            apps = load_mounted_apps(Path(temporary) / "models.json")
+        self.assertEqual({spec.kind: spec.endpoint for spec in apps.values()}, {
+            "monitor": "/monitor/",
+            "agents": "/agents/",
+        })
+        self.assertEqual(apps["agents"].alias, "AI 探员总部")
 
     def test_dump_and_disk_round_trip_retain_apps(self):
         raw = {"chat": {"alias": "chat-alias"}, "knowledge": knowledge_cfg(), "comfyui": proxy_cfg()}

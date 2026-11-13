@@ -11,6 +11,7 @@ const notes: Record<string, string> = {
   knowledge: "独立知识库反代",
   video: "本机视频库",
   monitor: "运行监控与模型对话",
+  agents: "本机 AI 探员",
   http: "自行注册的应用入口",
 };
 

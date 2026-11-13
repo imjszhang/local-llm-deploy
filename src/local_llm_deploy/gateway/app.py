@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import logging
 import os
+import queue
 import re
 import socket
+import struct
 import threading
 import time
 import uuid
@@ -30,6 +34,7 @@ from .service_browser import (ServiceWriter, asset_redirect, browser_authorized,
 from .websocket import forward_websocket
 from .monitoring import Monitoring
 from .monitor_api import MonitorAPI, monitor_target
+from .agents_api import AgentMonitor
 from .routing import Router, RoutingError, normalize_proxy_path
 from .scheduling import Scheduler, QueueFull, BackendUncertain, estimate_kv_tokens
 from .settings import GatewaySettings
@@ -40,7 +45,7 @@ class GatewayContext:
     def __init__(self, paths=None, *, settings=None, specs=None, proxies=None, discovery=None,
                  scheduler=None, transport=None, auth=None, monitoring=None,
                  spec_loader=None, registry_ttl=30, clock=time.monotonic, monitor_api=None,
-                 video=None, apps=None, app_loader=None):
+                 video=None, apps=None, app_loader=None, agent_monitor=None):
         self.paths = paths or project_paths()
         self.settings = settings or GatewaySettings.from_env()
         # Registry refresh is atomic; runtime scheduling limits remain owned
@@ -75,6 +80,8 @@ class GatewayContext:
         self.chat_store = ChatStore(self.paths)
         self.monitoring = monitoring or Monitoring(self.discovery, self.scheduler, self.settings)
         self.monitor_api = monitor_api or MonitorAPI(self)
+        self.agent_monitor = agent_monitor or AgentMonitor()
+        self.agent_monitor.start()
         self.video = video if video is not None else VideoApp.from_settings(
             self.settings, next((item for item in self.apps.values() if item.kind == 'video'), None))
         self.logger = AccessLogger(self.settings.access_log, capture_bytes=self.settings.capture_bytes,
@@ -327,7 +334,77 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         return body
 
     def _websocket_requested(self):
-        return self.headers.get('Upgrade', '').lower() == 'websocket'
+        upgrades = [v.strip().lower() for v in self.headers.get_all('Upgrade', [])]
+        if len(upgrades) != 1 or upgrades[0] != 'websocket':
+            return False
+        connections = [v.strip().lower() for v in self.headers.get('Connection', '').split(',')]
+        return 'upgrade' in connections
+
+    def _stream_agent_events(self, writer):
+        """Upgrade to WebSocket and stream agent events."""
+        ctx = self.context
+        if not self._websocket_requested():
+            raise RoutingError(400, 'WebSocket upgrade required')
+
+        # WebSocket handshake
+        key = self.headers.get('Sec-WebSocket-Key')
+        if not key:
+            raise RoutingError(400, 'Missing Sec-WebSocket-Key header')
+
+        accept = base64.b64encode(
+            hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()
+        ).decode()
+
+        self.send_response(101, 'Switching Protocols')
+        self.send_header('Upgrade', 'websocket')
+        self.send_header('Connection', 'Upgrade')
+        self.send_header('Sec-WebSocket-Accept', accept)
+        self.end_headers()
+
+        # Subscribe to agent events
+        q = queue.Queue(maxsize=100)
+        ctx.agent_monitor.subscribe(q)
+
+        # Send initial snapshot
+        try:
+            snapshot = ctx.agent_monitor.snapshot()
+            self._send_ws_frame(json.dumps({'type': 'snapshot', 'data': snapshot}).encode())
+
+            # Stream events
+            sock = self.connection
+            sock.settimeout(30)
+
+            while True:
+                try:
+                    event = q.get(timeout=25)
+                    self._send_ws_frame(json.dumps(event).encode())
+                except queue.Empty:
+                    # Send ping to keep connection alive
+                    self._send_ws_frame(b'', opcode=0x9)
+                except (BrokenPipeError, ConnectionResetError, socket.timeout):
+                    break
+        finally:
+            ctx.agent_monitor.unsubscribe(q)
+
+    def _send_ws_frame(self, data, opcode=0x1):
+        """Send a WebSocket frame (text or ping)."""
+        frame = bytearray()
+        frame.append(0x80 | opcode)  # FIN + opcode
+
+        length = len(data)
+        if length < 126:
+            frame.append(length)
+        elif length < 65536:
+            frame.append(126)
+            frame.extend(struct.pack('>H', length))
+        else:
+            frame.append(127)
+            frame.extend(struct.pack('>Q', length))
+
+        frame.extend(data)
+        self.wfile.write(bytes(frame))
+        self.wfile.flush()
+
 
     def _service_headers(self, spec):
         return upstream_headers(self, spec)
@@ -430,14 +507,29 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         except ConfigError as exc:
             raise RoutingError(400, str(exc)) from None
 
-    def _serve_monitor_app(self, app):
+    def _serve_published_app(self, app, filename, missing):
         remainder = urlsplit(self.path).path[len(app.prefix):] or '/'
         if remainder not in ('/', '/index.html'):
             raise RoutingError(404, 'Not found')
-        page = self.context.paths.static / 'monitor.html'
+        page = self.context.paths.static / filename
         if not page.is_file():
-            raise RoutingError(404, 'Monitor page is not published')
+            raise RoutingError(404, missing)
         self._send_document(page.read_bytes())
+
+    def _redirect_published_page(self, path, filename, kind):
+        if path != filename or self.command not in ('GET', 'HEAD'):
+            return False
+        app = next((item for item in self.context.apps.values() if item.kind == kind), None)
+        if app is None:
+            return False
+        query = urlsplit(self.path).query
+        location = app.endpoint + (('?' + query) if query else '')
+        self._static_cache_control = 'no-cache'
+        self.send_response(301)
+        self.send_header('Location', location)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+        return True
 
     def _send_document(self, body):
         self._static_cache_control = 'no-cache'
@@ -509,7 +601,10 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     ctx.video.dispatch(self, writer, self.path, self.command, body, self.headers)
                     return
                 if app.kind == 'monitor':
-                    self._serve_monitor_app(app)
+                    self._serve_published_app(app, 'monitor.html', 'Monitor page is not published')
+                    return
+                if app.kind == 'agents':
+                    self._serve_published_app(app, 'agents.html', 'Agents page is not published')
                     return
                 raise RoutingError(404, f'Unsupported app kind: {app.kind}')
             if is_service_path(self.path):
@@ -547,31 +642,41 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 key, include_output = monitor_target(request_path)
                 self._json(writer, ctx.monitor_api.snapshot() if key is None else ctx.monitor_api.detail(key, include_output))
                 return
+            if path == '/agents-api/v1/snapshot':
+                if not self._authorized(path):
+                    self.close_connection = True
+                    writer.error(401, 'Invalid API key', code='invalid_request_error')
+                    return
+                if self.command not in ('GET', 'HEAD'):
+                    raise RoutingError(405, 'Read-only endpoint')
+                self._json(writer, ctx.agent_monitor.snapshot())
+                return
+            if path == '/agents-api/v1/stream':
+                if not self._authorized(path):
+                    self.close_connection = True
+                    writer.error(401, 'Invalid API key', code='invalid_request_error')
+                    return
+                self._stream_agent_events(writer)
+                return
             if not path.startswith(('/api/', '/v1/')):
                 if path in ('/', '/index.html') and self.command in ('GET', 'HEAD'):
                     ctx.refresh()
-                    self._send_document(render_home(ctx.apps))
+                    self._send_document(render_home(ctx.apps, ctx.proxies))
                     return
-                if path == '/monitor.html' and self.command in ('GET', 'HEAD'):
+                if path in ('/monitor.html', '/agents.html'):
                     ctx.refresh()
-                    monitor = next((item for item in ctx.apps.values() if item.kind == 'monitor'), None)
-                    if monitor is not None:
-                        query = urlsplit(self.path).query
-                        location = monitor.endpoint + (('?' + query) if query else '')
-                        self._static_cache_control = 'no-cache'
-                        self.send_response(301)
-                        self.send_header('Location', location)
-                        self.send_header('Content-Length', '0')
-                        self.end_headers()
+                    if self._redirect_published_page(path, '/monitor.html', 'monitor'):
+                        return
+                    if self._redirect_published_page(path, '/agents.html', 'agents'):
                         return
                 location = asset_redirect(self, ctx.proxies)
                 if location and not os.path.isfile(self.translate_path(self.path)):
                     writer.start(307, {'Location': location, 'Cache-Control': 'no-store', 'Vary': 'Referer'})
                     writer.finish()
                     return
-                if path in ('/', '/index.html', '/monitor.html'):
+                if path in ('/', '/index.html', '/monitor.html', '/agents.html'):
                     self._static_cache_control = 'no-cache'
-                elif re.fullmatch(r'/monitor-assets/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8,}\.(?:js|css|svg|png|webp|woff2?)', path):
+                elif re.fullmatch(r'/(monitor|agent)-assets/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8,}\.(?:js|css|svg|png|webp|woff2?)', path):
                     self._static_cache_control = 'public, max-age=31536000, immutable'
                 if self.command == 'GET':
                     super().do_GET()

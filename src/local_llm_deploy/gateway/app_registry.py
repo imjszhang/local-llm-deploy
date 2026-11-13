@@ -100,9 +100,23 @@ def default_monitor_app() -> AppSpec:
 
 
 def ensure_monitor_app(apps: dict[str, AppSpec]) -> dict[str, AppSpec]:
-    if any(spec.kind == "monitor" for spec in apps.values()):
+    return _ensure_builtin_app(apps, "monitor", default_monitor_app)
+
+
+def default_agents_app() -> AppSpec:
+    return normalize_app("agents", {
+        "type": "app", "kind": "agents", "alias": "AI 探员总部", "prefix": "/agents",
+    })
+
+
+def ensure_agents_app(apps: dict[str, AppSpec]) -> dict[str, AppSpec]:
+    return _ensure_builtin_app(apps, "agents", default_agents_app)
+
+
+def _ensure_builtin_app(apps, kind, factory):
+    if any(spec.kind == kind for spec in apps.values()):
         return apps
-    spec = default_monitor_app()
+    spec = factory()
     try:
         _reject_conflicts(spec, {}, {}, apps, replacing=False)
     except ConfigError:
@@ -115,7 +129,8 @@ def ensure_monitor_app(apps: dict[str, AppSpec]) -> dict[str, AppSpec]:
 def load_mounted_apps(registry_path) -> dict[str, AppSpec]:
     path = Path(registry_path)
     declared = load_apps(path) if path.is_file() else {}
-    return ensure_monitor_app(merge_mounted_apps(declared, load_registered_apps(registration_path(path))))
+    mounted = ensure_monitor_app(merge_mounted_apps(declared, load_registered_apps(registration_path(path))))
+    return ensure_agents_app(mounted)
 
 
 class AppRegistrationStore:

@@ -180,6 +180,8 @@ class ConsoleSessions:
     def authorized(self, handler, path):
         allowed = ((path == '/monitor-api/v1/snapshot' or path.startswith('/monitor-api/v1/models/')) and
                    handler.command in ('GET', 'HEAD')) or (
+                       (path == '/agents-api/v1/snapshot' or path == '/agents-api/v1/stream') and
+                       handler.command in ('GET', 'HEAD')) or (
                        path == '/v1/chat/completions' and handler.command == 'POST') or (
                        path == '/chat-api/v1/sessions' and handler.command == 'GET') or (
                        re.fullmatch(r'/chat-api/v1/sessions/[A-Za-z0-9][A-Za-z0-9_-]{0,127}', path) is not None
