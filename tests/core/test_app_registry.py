@@ -45,17 +45,17 @@ class AppRegistryTests(unittest.TestCase):
     def test_normalize_registry_keeps_apps_apart_from_proxies(self):
         models, proxies, apps = normalize_registry({
             "chat": {"alias": "chat-alias"},
-            "comfyui": proxy_cfg(),
+            "tool": proxy_cfg(),
             "knowledge": knowledge_cfg(),
             "video": video_cfg(),
         })
         self.assertEqual(set(models), {"chat"})
-        self.assertEqual(set(proxies), {"comfyui"})
+        self.assertEqual(set(proxies), {"tool"})
         self.assertEqual(set(apps), {"knowledge", "video"})
         self.assertEqual(apps["knowledge"].prefix, "/knowledge")
         self.assertEqual(apps["knowledge"].endpoint, "/knowledge/")
         self.assertEqual(apps["video"].legacy_prefixes, ("/archive",))
-        self.assertNotEqual(proxies["comfyui"].prefix, apps["video"].prefix)
+        self.assertNotEqual(proxies["tool"].prefix, apps["video"].prefix)
 
     def test_kind_alias_and_prefix_conflicts_are_rejected(self):
         with self.assertRaises(ConfigError):
@@ -93,17 +93,17 @@ class AppRegistryTests(unittest.TestCase):
         self.assertEqual(apps["agents"].alias, "AI 探员总部")
 
     def test_dump_and_disk_round_trip_retain_apps(self):
-        raw = {"chat": {"alias": "chat-alias"}, "knowledge": knowledge_cfg(), "comfyui": proxy_cfg()}
+        raw = {"chat": {"alias": "chat-alias"}, "knowledge": knowledge_cfg(), "tool": proxy_cfg()}
         dumped = dump_registry(raw)
         self.assertEqual(dumped["knowledge"]["type"], "app")
-        self.assertEqual(dumped["comfyui"]["type"], "proxy")
+        self.assertEqual(dumped["tool"]["type"], "proxy")
         with tempfile.TemporaryDirectory() as temporary:
             paths = ProjectPaths(Path(temporary))
             paths.registry.write_text(json.dumps(raw), encoding="utf-8")
             models, proxies = load_catalog(paths.registry)
             apps = load_apps(paths.registry)
             self.assertEqual(set(models), {"chat"})
-            self.assertEqual(set(proxies), {"comfyui"})
+            self.assertEqual(set(proxies), {"tool"})
             self.assertEqual(set(apps), {"knowledge"})
             self.assertNotIn("knowledge", load_models(paths.registry))
 

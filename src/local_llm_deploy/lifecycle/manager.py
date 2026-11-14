@@ -186,7 +186,7 @@ def stop_service(paths, key: str, *, models=None, label=None, timeout=10.0) -> b
         return stopped
 
 
-def foreground_service(spec: ServiceSpec, paths, *, models=None) -> int:
+def foreground_service(spec: ServiceSpec, paths, *, models=None, startup_guard=None) -> int:
     """Keep a foreground parent to forward signals, reap the backend, and clean its record."""
     handlers = {}
     identity = None
@@ -195,7 +195,8 @@ def foreground_service(spec: ServiceSpec, paths, *, models=None) -> int:
     for signum in (signal.SIGTERM, signal.SIGINT):
         handlers[signum] = signal.signal(signum, interrupted)
     try:
-        identity = start_service(replace(spec, management="process", foreground=True), paths, models=models)
+        with startup_guard() if startup_guard else nullcontext():
+            identity = start_service(replace(spec, management="process", foreground=True), paths, models=models)
         child = process.child_handle(identity.pid)
         return child.wait() if child else 1
     finally:

@@ -156,20 +156,20 @@ class MonitorContractTests(MonitorFixture):
 
     def test_snapshot_lists_proxy_services_outside_models(self):
         from local_llm_deploy.config import normalize_proxy
-        spec = normalize_proxy('comfyui', {
-            'type': 'proxy', 'alias': 'ComfyUI', 'upstream': 'http://192.168.0.20:8188',
+        spec = normalize_proxy('tool', {
+            'type': 'proxy', 'alias': 'Service Tool', 'upstream': 'http://192.168.0.20:8188',
             'health_path': '/system_stats',
         })
-        self.context.proxies = {'comfyui': spec}
+        self.context.proxies = {'tool': spec}
         self.context.proxy_catalog.probe = lambda *a, **k: True
         self.context.proxy_catalog.health = lambda *a, **k: True
-        self.context.proxy_catalog.update({'comfyui': spec})
+        self.context.proxy_catalog.update({'tool': spec})
         data = self.snapshot()
-        self.assertEqual([row['key'] for row in data['services']], ['comfyui'])
+        self.assertEqual([row['key'] for row in data['services']], ['tool'])
         self.assertEqual(data['services'][0]['host'], '192.168.0.20')
-        self.assertEqual(data['services'][0]['endpoint'], '/services/comfyui/')
+        self.assertEqual(data['services'][0]['endpoint'], '/services/tool/')
         self.assertEqual(data['services'][0]['availability']['state'], 'healthy')
-        self.assertNotIn('comfyui', {row['key'] for row in data['models']})
+        self.assertNotIn('tool', {row['key'] for row in data['models']})
 
     def test_snapshot_lists_apps_outside_services(self):
         from tests.gateway.app_fixtures import knowledge_app, merge_apps, video_app

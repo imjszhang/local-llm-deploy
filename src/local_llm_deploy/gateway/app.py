@@ -23,6 +23,7 @@ from .app_registry import AppRegistrationStore, load_mounted_apps
 from .apps import (knowledge_backend_url, knowledge_timeout, knowledge_upstream,
                    match_app, matches_prefix, rewrite_legacy, slash_redirect)
 from .guide import build_guide, render_guide, wants_html
+from .mcp_guide import MCPGuide
 from .home import render_home
 from .mounted_auth import MountedAppAuth, enabled as mounted_auth_enabled, SESSION as APP_SESSION
 from .auth import ApiAuth, BackendAuthError, ConsoleSessions, backend_credentials
@@ -38,6 +39,7 @@ from .service_browser import (
 from .websocket import forward_websocket
 from .monitoring import Monitoring
 from .monitor_api import MonitorAPI, monitor_target
+from .mcp_admin import MCPAdminAPI, authorize as authorize_mcp_admin, is_admin_path
 from .agents_api import AgentMonitor
 from .routing import Router, RoutingError, normalize_proxy_path
 from .scheduling import Scheduler, QueueFull, BackendUncertain, estimate_kv_tokens
@@ -49,7 +51,7 @@ class GatewayContext:
     def __init__(self, paths=None, *, settings=None, specs=None, proxies=None, discovery=None,
                  scheduler=None, transport=None, auth=None, monitoring=None,
                  spec_loader=None, registry_ttl=30, clock=time.monotonic, monitor_api=None,
-                 video=None, apps=None, app_loader=None, agent_monitor=None):
+                 video=None, apps=None, app_loader=None, agent_monitor=None, mcp_admin=None, mcp_guide=None):
         self.paths = paths or project_paths()
         self.settings = settings or GatewaySettings.from_env()
         # Registry refresh is atomic; runtime scheduling limits remain owned
@@ -82,6 +84,8 @@ class GatewayContext:
         self.console_sessions = ConsoleSessions(self.auth)
         self.mounted_auth = MountedAppAuth(self.auth)
         self.chat_store = ChatStore(self.paths)
+        self.mcp_admin = mcp_admin or MCPAdminAPI(self)
+        self.mcp_guide = mcp_guide or MCPGuide(self.paths)
         self.monitoring = monitoring or Monitoring(self.discovery, self.scheduler, self.settings)
         self.monitor_api = monitor_api or MonitorAPI(self)
         self.agent_monitor = agent_monitor or AgentMonitor()
@@ -226,11 +230,14 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         # Validate credentials and size before accepting an upload, including
         # Expect: 100-continue clients. The regular dispatcher repeats checks.
         writer = ResponseWriter(self)
-        self._console_response = urlsplit(self.path).path.startswith(('/console-api', '/chat-api'))
+        self._console_response = urlsplit(self.path).path.startswith(('/console-api', '/chat-api', '/mcp-admin-api'))
         try:
+            if is_admin_path(urlsplit(self.path).path):
+                authorize_mcp_admin(self)
+                return super().handle_expect_100()
             if is_service_path(self.path):
                 spec, _remainder = self._service_target(normalize_proxy_path(self.path))
-                self._content_length(spec.max_body_bytes)
+                self._service_content_length(spec.max_body_bytes)
                 return super().handle_expect_100()
             app, _mode = match_app(self.path, self.context.apps)
             path = urlsplit(self.path if app is not None else normalize_proxy_path(self.path)).path
@@ -340,6 +347,47 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             raise RoutingError(400, 'Incomplete request body')
         return body
 
+    def _service_content_length(self, limit=None):
+        encodings = self.headers.get_all('Transfer-Encoding', [])
+        if not encodings:
+            return self._content_length(limit)
+        if (len(encodings) != 1 or encodings[0].strip().lower() != 'chunked' or
+                self.headers.get_all('Content-Length', [])):
+            raise RoutingError(400, 'Invalid service request framing')
+        return None
+
+    def _service_body(self, limit=None):
+        length = self._service_content_length(limit)
+        if length is not None:
+            return self._body(limit)
+        ceiling = self.context.settings.max_body_bytes if limit is None else limit
+        body = bytearray()
+        while True:
+            line = self.rfile.readline(8193)
+            size_text = line.split(b';', 1)[0].strip()
+            if (len(line) > 8192 or not line.endswith(b'\r\n') or
+                    not re.fullmatch(rb'[0-9a-fA-F]+', size_text)):
+                raise RoutingError(400, 'Invalid chunk size')
+            size = int(size_text, 16)
+            if len(body) + size > ceiling:
+                raise RoutingError(413, 'Request body exceeds configured size limit')
+            if size == 0:
+                # Accept bounded trailers but never merge them into trusted headers.
+                trailer_bytes = 0
+                while True:
+                    trailer = self.rfile.readline(8193)
+                    trailer_bytes += len(trailer)
+                    if len(trailer) > 8192 or trailer_bytes > 65536 or not trailer.endswith(b'\r\n'):
+                        raise RoutingError(400, 'Invalid chunk trailers')
+                    if trailer == b'\r\n':
+                        return bytes(body)
+                    if b':' not in trailer or trailer[:1] in (b' ', b'\t'):
+                        raise RoutingError(400, 'Invalid chunk trailers')
+            chunk = self.rfile.read(size)
+            if len(chunk) != size or self.rfile.read(2) != b'\r\n':
+                raise RoutingError(400, 'Incomplete chunked request body')
+            body.extend(chunk)
+
     def _websocket_requested(self):
         upgrades = [v.strip().lower() for v in self.headers.get_all('Upgrade', [])]
         if len(upgrades) != 1 or upgrades[0] != 'websocket':
@@ -432,8 +480,11 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             raise RoutingError(401, 'Console session does not authorize service requests')
         if spec is None:
             raise RoutingError(404, 'Unknown service endpoint')
-        if self._websocket_requested() and not spec.websocket:
-            raise RoutingError(501, 'WebSocket proxying is not enabled for this service')
+        if any(value.strip().lower() == 'websocket' for value in self.headers.get_all('Upgrade', [])):
+            if not spec.websocket:
+                raise RoutingError(501, 'WebSocket proxying is not enabled for this service')
+            if not self._websocket_requested():
+                raise RoutingError(400, 'Invalid WebSocket handshake')
         if self.command not in spec.methods:
             raise RoutingError(405, 'Method not allowed')
         if not path_allowed(spec.paths, remainder):
@@ -474,7 +525,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         if self._websocket_requested():
             forward_websocket(self, writer, target, headers, ctx.settings, timeout)
             return
-        body = self._body(spec.max_body_bytes)
+        body = self._service_body(spec.max_body_bytes)
         ctx.transport.forward(self, writer, target, self.command, body, headers, timeout=timeout)
 
     def _dispatch_registered_apps(self, writer, path):
@@ -553,7 +604,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         ctx = self.context
         with ctx._catalog_lock:
             apps, proxies, specs = dict(ctx.apps), dict(ctx.proxies), dict(ctx.specs)
-        payload = build_guide(apps, proxies, specs, ctx.discovery.models())
+        payload = build_guide(apps, proxies, specs, ctx.discovery.models(),
+                              mcp_hub=ctx.mcp_guide.snapshot(self.headers.get('Host')))
         if wants_html(self.headers.get('Accept')):
             self._send_document(render_guide(payload))
             return
@@ -567,11 +619,26 @@ class ProxyHandler(SimpleHTTPRequestHandler):
     def dispatch(self):
         ctx = self.context
         self._static_cache_control = None
-        self._console_response = urlsplit(self.path).path.startswith(('/console-api', '/chat-api'))
+        self._console_response = urlsplit(self.path).path.startswith(('/console-api', '/chat-api', '/mcp-admin-api'))
         writer = ResponseWriter(self)
         self.connection.settimeout(ctx.settings.client_write_timeout)
         path = urlsplit(self.path).path
         try:
+            if is_admin_path(path):
+                ctx.mcp_admin.dispatch(self, writer)
+                return
+            if path in ('/mcp-hub', '/mcp-hub/'):
+                if self.command not in ('GET', 'HEAD'):
+                    raise RoutingError(405, 'Method not allowed')
+                if path == '/mcp-hub':
+                    writer.start(308, {'Location': '/mcp-hub/', 'Cache-Control': 'no-store'})
+                    writer.finish()
+                    return
+                page = ctx.paths.static / 'monitor.html'
+                if not page.is_file():
+                    raise RoutingError(503, 'MCP Hub 管理页面尚未发布')
+                self._send_document(page.read_bytes())
+                return
             if path == '/gateway-api' or path.startswith('/gateway-api/'):
                 self._dispatch_registered_apps(writer, path)
                 return
@@ -690,6 +757,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                         return
                 location = asset_redirect(self, ctx.proxies)
                 if location and not os.path.isfile(self.translate_path(self.path)):
+                    self.close_connection = True  # The redirected request may still have an unread body.
                     writer.start(307, {'Location': location, 'Cache-Control': 'no-store', 'Vary': 'Referer'})
                     writer.finish()
                     return
@@ -757,6 +825,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 deadline = started + ctx.settings.queue_timeout
                 while not ticket.acquire(timeout=min(ctx.settings.keepalive, max(0, deadline - time.monotonic()))):
                     if time.monotonic() >= deadline:
+                        # Publish released admission before the client receives completion.
+                        ticket.release()
                         writer.error(504, 'Inference queue wait timed out', protocol=route.protocol if route.stream else None)
                         return
                     if route.stream and route.protocol != 'ollama':

@@ -36,7 +36,9 @@ def main() -> int:
     paths = project_paths(spec.env.get("LOCAL_LLM_ROOT", str(spec.cwd)))
     if spec.pid_path != paths.run / (spec.key + ".pid"):
         raise LifecycleError("runner PID 路径与所属项目不一致")
-    models = load_specs(paths.registry) if paths.registry.exists() else {}
+    # The Hub is independent of model registration; a broken models.json must
+    # not prevent its managed runner from bringing the tools service back up.
+    models = load_specs(paths.registry) if spec.key != "mcp-hub" and paths.registry.exists() else {}
     env = dict(spec.env)
     env["LOCAL_LLM_MANAGED_INSTANCE"] = "1"
     return foreground_service(replace(spec, management="process", supervisor_label=spec.label, env=env), paths, models=models)

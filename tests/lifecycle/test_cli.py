@@ -156,21 +156,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
 
     def test_proxy_is_listed_and_rejected_for_lifecycle(self):
-        self.raw["comfyui"] = {
-            "type": "proxy", "alias": "ComfyUI", "upstream": "http://127.0.0.1:8188",
+        self.raw["tool"] = {
+            "type": "proxy", "alias": "Service Tool", "upstream": "http://127.0.0.1:8188",
             "health_path": "/system_stats", "websocket": False,
         }
         self.paths.registry.write_text(json.dumps(self.raw))
         code, out, err = self.invoke("list", "--json")
         self.assertEqual(code, 0, err)
         rows = {row["key"]: row for row in json.loads(out)}
-        self.assertEqual(rows["comfyui"]["kind"], "proxy")
-        self.assertEqual(rows["comfyui"]["endpoint"], "/services/comfyui/")
-        self.assertNotIn("chat", rows["comfyui"]["capabilities"])
+        self.assertEqual(rows["tool"]["kind"], "proxy")
+        self.assertEqual(rows["tool"]["endpoint"], "/services/tool/")
+        self.assertNotIn("chat", rows["tool"]["capabilities"])
         code, out, err = self.invoke("status", "--json")
         self.assertEqual(code, 0, err)
-        self.assertIn("comfyui", {row["key"] for row in json.loads(out)})
-        for args in (("start", "comfyui", "--dry-run"), ("stop", "comfyui"), ("download", "comfyui", "--dry-run")):
+        self.assertIn("tool", {row["key"] for row in json.loads(out)})
+        for args in (("start", "tool", "--dry-run"), ("stop", "tool"), ("download", "tool", "--dry-run")):
             code, _, err = self.invoke(*args)
             self.assertEqual(code, 1, args)
             self.assertIn("外部服务", err)

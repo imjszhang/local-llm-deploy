@@ -31,6 +31,8 @@ python3 -m venv .venv
 
 打开 [http://localhost:8888/](http://localhost:8888/) 进入应用首页，从这里打开知识库、视频库、运行监控、AI 探员总部和自行登记的入口。监控与模型对话在内置应用 `/monitor/`，探员总部在 `/agents/`；旧地址 `/monitor.html`、`/agents.html` 会跳到对应入口。通过本机地址访问时自动连接，网关在服务端读取 `.api-key`，根 Key 不传入浏览器；远程访问通过“访问设置”输入凭据。模型对话工作区支持本地推理测试，在“测试设置”中按模型配置思考开关、推理强度与预算，详见 [思考控制](docs/chat-reasoning.md)。启动无需 Node；前端开发和构建见 [frontend/README.md](frontend/README.md)。
 
+局域网 MCP 服务由独立的 **MCP Hub** 提供，默认端口 `8899`，首个服务为 ComfyUI。首页的 [MCP Hub 管理页](http://127.0.0.1:8888/mcp-hub/) 可配置服务、独立启停、创建设备令牌及查看任务和日志；该页面使用管理员根密钥登录，Hub 离线时仍可管理。安装与客户端接入见 [MCP Hub 指南](docs/mcp-hub.md)。
+
 ## 日常管理
 
 ```bash
@@ -113,6 +115,7 @@ docs/                 部署、开发、架构、升级与验收文档
 - [重构计划](docs/refactoring-plan.md)
 - [监控控制台实施与验收](docs/monitor-ui-plan.md)
 - [Video Remake 视频工作台接入](docs/video-remake.md)
+- [独立 MCP Hub 与 ComfyUI 接入](docs/mcp-hub.md)
 
 ### 本地模型对话
 

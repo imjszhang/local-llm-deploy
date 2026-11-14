@@ -14,7 +14,7 @@
 - `/agents-api/v1/snapshot` 本机探员会话快照。
 - `/services/<key>/*` 外部 HTTP 服务反代。
 
-仅 `GET/HEAD /api/models`、`/api/system` 和 `/api/guide` 作为明确的只读公开例外。`/api/guide` 说明当前应用、外部服务和模型接口；浏览器打开是页面，请求 `application/json` 时返回同一份内容。它不包含上游地址、端口、进程或凭据。监控和对话页手动输入的 API Key 保存在该浏览器来源的本地存储中，刷新后优先读取，可再修改或清除；不写入静态资源或 URL。本机自动连接使用的临时会话不会写入这份存储。
+仅 `GET/HEAD /api/models`、`/api/system` 和 `/api/guide` 作为明确的只读公开例外。`/api/guide` 说明当前应用、外部服务、MCP 服务和模型接口；浏览器打开是页面，请求 `application/json` 时返回同一份内容。它公开 MCP Hub 的客户端连接地址，但不包含上游地址、上游端口、进程、启动参数或凭据。监控和对话页手动输入的 API Key 保存在该浏览器来源的本地存储中，刷新后优先读取，可再修改或清除；不写入静态资源或 URL。本机自动连接使用的临时会话不会写入这份存储。
 
 `type: app` 条目登记网关应用入口，与 `type: proxy` 的 `/services/<key>/` 分开。未登记的前缀不挂载。`/knowledge/` 保持独立凭据语义：转发知识库客户端 Authorization，不用模型 Key 覆盖。
 
@@ -32,7 +32,7 @@
 
 | 路径 | 用途 | 模型能力 |
 | --- | --- | --- |
-| `GET /api/guide` | 当前应用、外部服务和模型接口说明 | 不属于模型 API |
+| `GET /api/guide` | 当前应用、外部服务、MCP 服务和模型接口说明 | 不属于模型 API |
 | `GET /v1/models` | 当前可路由模型键与别名 | 所有在线模型 |
 | `POST /v1/chat/completions` | Chat JSON / SSE | chat |
 | `POST /v1/completions` | 文本补全 | chat |
@@ -52,6 +52,28 @@
 Responses / Messages 仅在模型 `endpoints` 显式包含 `/v1/responses`、`/v1/messages` 时开放。网关提供透传与相应流式错误封装，实际模型后端必须支持对应协议。
 
 模型代理对路径解码一次，拒绝畸形/残余编码、点段和歧义分隔符。llama 原生 `/completion`、`/infill`、`/embedding`、`/reranking`、`/v1/reranking` 按对应标准能力和端点声明校验，并经过相同调度器。仅明确的元数据读取、tokenize/detokenize/apply-template 和 Ollama 管理路径允许无推理调度透传；未知代理端点返回 404，错误方法返回 405。
+
+### Guide 中的 MCP 目录
+
+`GET /api/guide` 的 `mcp_hub` 字段按当前 Hub 配置和运行状态生成。`services` 包含服务的 `id`、`name`、`kind`、`enabled`、`available`、`status`、客户端 `url`、`transport`、`tool_count` 和 `remote_online`；`aggregate` 给出 `/mcp/default` 聚合入口。连接协议为 Streamable HTTP。地址优先使用配置的 `listen.public_url`，否则使用当前请求主机名与 Hub 的实际监听端口；仅监听回环地址时明确标为本机专用。无法确定地址时 `url` 为 `null`。
+
+`authentication` 说明独立设备令牌的 `Authorization: Bearer <设备令牌>` 用法，`permissions` 说明 `read` 和 `generate`。令牌须由管理员在 `/mcp-hub/` 为设备或项目创建，不能拿网关管理员密钥或控制台会话代替。公开目录不授予访问权限；实际工具目录仍由设备的服务范围、权限和服务白名单共同决定。
+
+同一份 JSON 和浏览器页面还提供令牌申请步骤与可复制的客户端配置：
+
+| 字段 | 内容 |
+| --- | --- |
+| `token_setup` | `title`、`management_path` 和 `steps`；每个步骤包含 `title`、`detail` |
+| `connection_examples` | 启用服务及 `default` 聚合入口的示例列表；每项包含 `service_id`、`name`、`url`、`available`、`configs` |
+| `connection_examples[].configs` | 每个客户端的 `client`、`config_file`、`format` 和可复制文本 `content` |
+| `connection_notes` | 字符串数组，说明地址选择、合并配置、令牌保存及设备权限 |
+| `verification` | 字符串数组，说明重新连接客户端、核对工具目录与 ComfyUI 状态的验证方法 |
+
+示例地址随 Hub 配置和访问主机名生成；禁用服务或没有有效连接地址时不生成对应示例。示例存在不等于服务已运行，仍需检查 `available`。Claude Code 示例用于 `.mcp.json`，包含 `mcpServers` 和 `type: "http"`；Cursor 示例用于 `.cursor/mcp.json`，不包含 `type`；Codex 示例用于 `.codex/config.toml`，使用 `http_headers.Authorization`，启动超时为 30 秒、工具超时为 400 秒。将所需服务片段合并到已有配置并保留其他服务和设置；不要用整个示例覆盖已有文件。公开示例只包含 `<设备令牌>` 占位符，须在客户端私下替换；含令牌的配置应限制文件权限并加入 Git 忽略。
+
+令牌步骤对应管理页的实际入口：由管理员使用“管理员 API Key”点击“连接管理”，进入“设备与连接”，在“添加设备 / 项目”填写“名称”、选择“允许访问的服务”，再点击“创建设备令牌”。“允许生成与提交任务”默认勾选，只读设备应取消勾选；读取权限始终包含。成功后用“复制令牌”保存，再点“已保存，关闭”。原令牌只在创建成功时显示，不能从后续快照找回。普通局域网用户应向管理员领取设备令牌；本机自动会话和设备令牌都不能创建其他令牌。管理员在本机或局域网管理均须提供真正的管理员密钥，浏览器请求须同源。完整步骤与三种客户端示例见 [MCP Hub](mcp-hub.md#给客户端设备授权)。
+
+`available` 表示 Hub 已挂载服务，并不保证模型、模板或远端生成能力就绪。`remote_online` 仅反映最近已有的远端探测结果，未探测时为 `null`；guide 不触发生成或额外的上游探活。Hub 停止、内部状态不可读或最近探测显示远端离线时，服务标为不可用。配置保存后尚未重启应用时，`requires_restart` 为 `true`，服务状态为 `pending_restart`，暂不标为可用。停用条目保留在目录中并标为 `disabled`；未配置服务时返回空列表。读取 guide 不会启动 Hub，也不会创建数据库或内部凭据。
 
 ## 监控 API v1
 
@@ -139,12 +161,10 @@ SSE 发送头前可返回 HTTP 错误；发送保活头后按对应协议返回�
 
 `POST /v1/audio/speech` 接收 `model`、`input`、`ref_audio_base64`、`ref_text`、`language`、`response_format: "wav"`。字段约束和调用脚本见 [Qwen3-TTS 部署](qwen3-tts-deployment.md)。这是项目扩展，首版不支持音频流，`stream:true` 返回 400。默认模型按注册表 `default_for:["tts"]` 或 `DEFAULT_TTS_MODEL` 选择；独立 TTS lane 默认并发 1，可通过 `TTS_LANE_CONCURRENT` 设置。
 
-### ComfyUI 网页与完整接口
+## 服务代理
 
-ComfyUI 示例配置使用完整代理：不设置 `paths` 白名单，允许 GET、HEAD、POST、PUT、DELETE、PATCH、OPTIONS，开启 `websocket: true`、`browser: true`，设置 `health_check: false`。监控仍可独立探活，但探活结果不阻止请求。
+已在 `models.json` 注册的 `type: proxy` 服务通过 `/services/<key>/` 访问。未注册的服务不挂载。网关按配置进行鉴权、路径和方法检查，并转发 HTTP 请求；`websocket: true` 启用 WebSocket，`health_check: false` 允许直接转发而不以探活结果作为前置条件。
 
-访问 `http://网关地址:8888/services/comfyui/`。从本机网关页面点开时直接使用当前网关 API Key，不再弹出用户名和密码。局域网浏览器若已保存该 Key，也会先用它换取服务 cookie；没有保存时才弹出登录框，用户名任意，密码填写网关 API Key（项目 `.api-key`）。网关发放 12 小时、HttpOnly、SameSite=Strict、仅限该服务路径的签名 cookie，供资源、API、WebSocket 使用；更换 API Key 后 cookie 失效。程序客户端继续使用 Bearer Key。网关登录凭据及会话 cookie 不转发给 ComfyUI。
+`browser: true` 提供浏览器登录和仅限该服务路径的签名 cookie；程序客户端使用 Bearer Key。浏览器登录用户名任意，密码为网关 API Key；浏览器登录凭据和网关会话 cookie 不转发给上游。网页服务须兼容子路径部署；服务代理不会改写前端脚本。
 
-`/services/comfyui` 自动跳到带尾斜杠的入口。转发去掉服务前缀，保留查询参数与编码后的文件路径；上游根路径重定向和 cookie Path 会映射回服务前缀。支持工作流提交、队列、历史、上传下载、扩展接口以及 `/ws` 文本/二进制消息。响应正文不改写。对于带同源服务页 Referer 的站点根路径请求（例如 `/assets/`、`/play`、`/logout`），在不覆盖网关已有文件的前提下以 307 跳回该服务前缀。POST 因此仍交给上游。官方前端使用相对资源和根据当前路径生成的 API/WS 地址；第三方插件若硬编码站点根路径或上游地址，仍需修正插件的 URL 配置。
-
-请求体大小默认受 `MAX_REQUEST_BODY_BYTES`（64 MiB）限制，可用该服务的 `max_body_bytes` 单独覆盖。`timeout` 用于 HTTP 请求及 WebSocket 握手；升级成功后的空闲 WebSocket 不按 HTTP 超时关闭。
+请求体默认受 `MAX_REQUEST_BODY_BYTES`（64 MiB）限制，可通过服务的 `max_body_bytes` 单独设置。`timeout` 用于 HTTP 请求及 WebSocket 握手，升级成功后的空闲 WebSocket 不按 HTTP 超时关闭。

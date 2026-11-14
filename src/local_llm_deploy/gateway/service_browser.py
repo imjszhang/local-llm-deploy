@@ -37,6 +37,8 @@ def _single_header(headers, name):
 def local_browser_navigation(handler):
     """A person opening a service from this machine's own gateway page."""
     headers = handler.headers
+    if handler.command not in ('GET', 'HEAD'):
+        return False
     if any(name.lower() in ('forwarded', 'via', 'x-real-ip') or name.lower().startswith('x-forwarded-')
            for name in headers):
         return False
@@ -46,7 +48,7 @@ def local_browser_navigation(handler):
             peer = peer.ipv4_mapped
         if not peer.is_loopback:
             return False
-        host = headers.get('Host', '')
+        host = _single_header(headers, 'Host')
         if not host or any(char.isspace() for char in host) or '%' in host:
             return False
         parsed = urlsplit('//' + host)
@@ -61,7 +63,8 @@ def local_browser_navigation(handler):
         return False
     if _single_header(headers, 'Sec-Fetch-Mode') != 'navigate' or _single_header(headers, 'Sec-Fetch-Dest') != 'document':
         return False
-    return _single_header(headers, 'Sec-Fetch-Site') in ('same-origin', 'none')
+    return (_single_header(headers, 'Sec-Fetch-Site') in ('same-origin', 'none') and
+            same_origin(handler))
 
 
 def browser_authorized(handler, spec):
@@ -136,12 +139,14 @@ def upstream_headers(handler, spec):
                 del headers[name]
     if spec.auth_upstream == 'bearer':
         headers['Authorization'] = 'Bearer ' + spec.raw['auth']['bearer']
-    # ComfyUI compares Origin with Host; the HTTP transport sends the upstream Host.
+    # Browser upstreams compare Origin with the rewritten upstream Host.
     if spec.raw.get('browser') and same_origin(handler):
         for name in list(headers):
             if name.lower() == 'origin':
                 parsed = urlsplit(spec.upstream)
                 headers[name] = f'{parsed.scheme}://{parsed.netloc}'
+            elif name.lower() == 'sec-fetch-site':
+                headers[name] = 'same-origin'
     return headers
 
 
@@ -159,10 +164,16 @@ class ServiceWriter:
         for name, value in pairs:
             if self.spec.strip_prefix and name.lower() == 'location':
                 upstream = self.spec.upstream.rstrip('/')
-                if value.startswith(upstream + '/'):
-                    value = self.spec.prefix + value[len(upstream):]
-                elif value.startswith('/') and not value.startswith('//'):
-                    value = self.spec.prefix + value
+                parsed = urlsplit(upstream)
+                bases = (upstream, '//' + parsed.netloc + parsed.path)
+                for upstream_base in bases:
+                    if value == upstream_base or value.startswith((upstream_base + '/', upstream_base + '?', upstream_base + '#')):
+                        suffix = value[len(upstream_base):]
+                        value = self.spec.prefix + (suffix if suffix.startswith('/') else '/' + suffix)
+                        break
+                else:
+                    if value.startswith('/') and not value.startswith('//'):
+                        value = self.spec.prefix + value
             elif self.spec.strip_prefix and name.lower() == 'set-cookie':
                 try:
                     cookies = SimpleCookie(value)
@@ -181,7 +192,14 @@ class ServiceWriter:
         return result
 
     def start(self, status, headers=None):
-        self.writer.start(status, self.map_headers(headers or {}))
+        pairs = list(headers.items()) if hasattr(headers, 'items') else list(headers or [])
+        lengths = [value for name, value in pairs if name.lower() == 'content-length']
+        transfer = any(name.lower() == 'transfer-encoding' for name, _ in pairs)
+        length = None
+        if (len(lengths) == 1 and lengths[0].isascii() and lengths[0].isdigit() and
+                not transfer and status >= 200 and status != 204):
+            length = int(lengths[0])
+        self.writer.start(status, self.map_headers(pairs), content_length=length)
 
 
 def asset_redirect(handler, proxies):

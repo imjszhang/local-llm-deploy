@@ -67,8 +67,8 @@ export function createSnapshot(now = Date.now()): Snapshot {
       }),
     ],
     services: [{
-      key: 'comfyui', alias: 'ComfyUI', upstream: 'http://192.168.0.20:8188',
-      host: '192.168.0.20', port: 8188, endpoint: '/services/comfyui/',
+      key: 'service-tool', alias: 'Service Tool', upstream: 'http://192.168.0.20:8188',
+      host: '192.168.0.20', port: 8188, endpoint: '/services/service-tool/',
       availability: { state: 'healthy', reason: null },
     }],
     apps: [{

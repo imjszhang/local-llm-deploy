@@ -21,7 +21,7 @@ from .lifecycle.observe import health_ready, observe_instances
 from .lifecycle.types import LifecycleError
 
 
-COMMANDS = ("list", "models", "registry", "apps", "download", "register", "remove", "start", "stop",
+COMMANDS = ("list", "models", "registry", "apps", "download", "register", "remove", "start", "stop", "restart",
             "status", "logs", "plan", "foreground", "daemon", "reconcile", "config", "engine",
             "deploy", "monitor", "compat", "run", "help")
 
@@ -123,6 +123,19 @@ def _start(paths, argv, *, action="start", explicit_ds4=False):
     args = parser.parse_args(argv)
     if action == "foreground":
         args.management = "process"
+    if args.model == "mcp-hub":
+        from .mcp_hub.controller import HubController
+        controller = HubController(paths)
+        if args.dry_run or action == "plan":
+            print(json.dumps(controller.plan(args), ensure_ascii=False, indent=2))
+        elif action == "foreground":
+            return controller.foreground(args)
+        else:
+            result = controller.restart(args) if action == "restart" else controller.start(args)
+            print(f"mcp-hub: {result['status']} (PID {result['pid'] or '-'}, port {result['port']})")
+        return 0
+    if action == "restart":
+        raise LifecycleError("restart 当前仅支持 mcp-hub；模型请使用 stop 后 start")
     if args.model != "serve-ui":
         _reject_proxy(paths, args.model, "启动")
     models = _models(paths, optional=args.model == "serve-ui" or explicit_ds4)
@@ -144,6 +157,14 @@ def _status(paths, argv):
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--probe", action="store_true", help="额外执行只读 HTTP 就绪检查")
     args = parser.parse_args(argv)
+    if args.model == "mcp-hub":
+        from .mcp_hub.controller import HubController
+        row = HubController(paths).status()
+        if args.json:
+            print(json.dumps([row], ensure_ascii=False, indent=2))
+        else:
+            print(f"mcp-hub: {row['status']} (PID {row['pid'] or '-'}, port {row['port']}, {row['management']})")
+        return 0
     models = _models(paths, optional=True)
     proxies = _proxies(paths, optional=True)
     observations = observe_instances(paths, models, probe=args.probe)
@@ -182,6 +203,11 @@ def _stop(paths, argv, *, explicit=False):
     args = parser.parse_args(argv)
     if bool(args.model) == args.all:
         parser.error("提供一个模型名或 --all")
+    if args.model == "mcp-hub":
+        from .mcp_hub.controller import HubController
+        row = HubController(paths).stop(timeout=args.timeout)
+        print(f"mcp-hub: {row['status']}")
+        return 0
     if args.model:
         _reject_proxy(paths, args.model, "停止")
     models = _models(paths, optional=True)
@@ -200,6 +226,16 @@ def _daemon(paths, argv, *, explicit_ds4=False):
     parser = _start_options(_parser("daemon"))
     parser.add_argument("operation", choices=("install", "uninstall", "start"), nargs="?", default="start")
     args = parser.parse_args(argv)
+    if args.model == "mcp-hub":
+        from .mcp_hub.controller import HubController
+        args.management = "launchd"
+        controller = HubController(paths)
+        if args.dry_run:
+            print(json.dumps(controller.plan(args), ensure_ascii=False, indent=2))
+        else:
+            row = controller.daemon(args.operation, args)
+            print(f"mcp-hub: {args.operation} 完成 ({row['status']})")
+        return 0
     if args.model not in ("serve-ui", "ds4"):
         _reject_proxy(paths, args.model, "由 launchd 管理")
     models = _models(paths, optional=args.model in ("serve-ui", "ds4"))
@@ -426,7 +462,7 @@ def main(argv=None):
             return 0
         if cmd == "status":
             return _status(paths, args)
-        if cmd in ("start", "plan", "foreground"):
+        if cmd in ("start", "restart", "plan", "foreground"):
             return _start(paths, args, action=cmd)
         if cmd == "stop":
             return _stop(paths, args)
@@ -450,6 +486,15 @@ def main(argv=None):
             sub.add_argument("--no-follow", action="store_true")
             sub.add_argument("--lines", type=int, default=100)
             opts = sub.parse_args(args)
+            if opts.model == "mcp-hub":
+                from .mcp_hub.controller import HubController
+                controller = HubController(paths)
+                if opts.no_follow:
+                    print(controller.logs(opts.lines), end="")
+                else:
+                    for chunk in controller.follow_logs(opts.lines):
+                        print(chunk, end="", flush=True)
+                return 0
             if Path(opts.model).name != opts.model or opts.model in (".", ".."):
                 raise LifecycleError("无效模型名")
             path = paths.logs / f"{opts.model}.log"

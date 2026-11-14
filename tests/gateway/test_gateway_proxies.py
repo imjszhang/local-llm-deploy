@@ -139,6 +139,44 @@ class ServiceProxyTests(unittest.TestCase):
         connection.close()
         return result
 
+    def raw_response(self, headers, body=b'', path='/services/tool/upload/image', method='POST'):
+        sock = socket.create_connection(('127.0.0.1', self.gateway.server_port), timeout=2)
+        self.addCleanup(sock.close)
+        request = f'{method} {path} HTTP/1.1\r\nConnection: close\r\n' + headers + '\r\n'
+        sock.sendall(request.encode() + body)
+        response = http.client.HTTPResponse(sock)
+        response.begin()
+        result = response.status, response.read(), dict(response.getheaders())
+        response.close()
+        return result
+
+    def test_chunked_upload_and_framing_limits(self):
+        self.enable_browser()
+        headers = f'Host: 127.0.0.1:{self.gateway.server_port}\r\nAuthorization: Bearer service-key\r\nTransfer-Encoding: chunked\r\n'
+        status, _, _ = self.raw_response(headers, b'3\r\nabc\r\n2\r\n\x00\xff\r\n0\r\nX-Optional: value\r\n\r\n')
+        self.assertEqual(status, 200)
+        self.assertEqual(self.state.requests[-1][2], b'abc\x00\xff')
+        self.assertEqual(self.state.requests[-1][3].get('Content-Length'), '5')
+        self.assertNotIn('Transfer-Encoding', self.state.requests[-1][3])
+        self.assertNotIn('X-Optional', self.state.requests[-1][3])
+        self.assertEqual(self.raw_response(headers, b'41\r\n' + b'x' * 65 + b'\r\n0\r\n\r\n')[0], 413)
+        self.assertEqual(self.raw_response(headers + 'Content-Length: 0\r\n', b'0\r\n\r\n')[0], 400)
+        self.assertEqual(self.raw_response(headers, b'nope\r\n')[0], 400)
+
+    def test_expect_continue_checks_auth_and_size_before_reading(self):
+        self.enable_browser()
+        for authorization, length, expected in (('', 1, 401), ('Bearer service-key', 65, 413)):
+            with self.subTest(status=expected):
+                sock = socket.create_connection(('127.0.0.1', self.gateway.server_port), timeout=2)
+                self.addCleanup(sock.close)
+                sock.sendall((f'POST /services/tool/upload/image HTTP/1.1\r\nHost: 127.0.0.1:{self.gateway.server_port}\r\n'
+                    f'Authorization: {authorization}\r\nContent-Length: {length}\r\n'
+                    'Expect: 100-continue\r\nConnection: close\r\n\r\n').encode())
+                stream = sock.makefile('rb')
+                self.addCleanup(stream.close)
+                self.assertIn(f' {expected} '.encode(), stream.readline())
+        self.assertEqual(self.state.requests, [])
+
     def test_parse_and_path_allowlist(self):
         self.assertEqual(parse_service_request('/services/tool/prompt?x=1'), ('tool', '/prompt?x=1'))
         self.assertEqual(parse_service_request('/services/tool'), ('tool', '/'))
@@ -223,7 +261,6 @@ class ServiceProxyTests(unittest.TestCase):
         status, payload, _ = self.request('/v1/models')
         self.assertEqual(status, 200)
         self.assertNotIn('tool', {item['id'] for item in json.loads(payload)['data']})
-        self.assertNotIn('comfyui', {item['id'] for item in json.loads(payload)['data']})
 
     def enable_browser(self):
         self.proxy = normalize_proxy('tool', {**self.proxy.raw, 'paths': None,

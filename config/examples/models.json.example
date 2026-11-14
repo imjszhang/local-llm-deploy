@@ -135,31 +135,6 @@
       "kv_budget_ratio": 0.85
     }
   },
-  "comfyui": {
-    "type": "proxy",
-    "alias": "ComfyUI",
-    "upstream": "http://192.168.0.20:8188",
-    "health_path": "/system_stats",
-    "timeout": 120,
-    "strip_prefix": true,
-    "methods": [
-      "GET",
-      "HEAD",
-      "POST",
-      "PUT",
-      "DELETE",
-      "PATCH",
-      "OPTIONS"
-    ],
-    "auth": {
-      "gateway": "api_key",
-      "upstream": "none",
-      "console": false
-    },
-    "websocket": true,
-    "browser": true,
-    "health_check": false
-  },
   "knowledge": {
     "type": "app",
     "kind": "knowledge",

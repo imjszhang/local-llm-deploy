@@ -3,28 +3,34 @@
   "entry": "monitor.html",
   "files": [
     {
-      "path": "monitor-assets/ChatWorkspace-B9KSxmxW.js",
-      "sha256": "fe7b154b106278c6f76015e0b4413c716143bea3d646ed89e3409b0900bcfca2",
-      "bytes": 185269,
-      "gzip_bytes": 71857
-    },
-    {
       "path": "monitor-assets/ChatWorkspace-BDSotk4W.css",
       "sha256": "6587f692549a317975b6763862b5829acf05f6923a90d96e8ce97a2ce1b8da0c",
       "bytes": 25639,
       "gzip_bytes": 5469
     },
     {
-      "path": "monitor-assets/monitor-B1lTIgQe.css",
-      "sha256": "6eb12f2b7997bf13bb508f1da18e5c23c261f48432679f45e6f37f38065f5dfd",
-      "bytes": 36957,
-      "gzip_bytes": 8523
+      "path": "monitor-assets/ChatWorkspace-CEQAePTe.js",
+      "sha256": "8941e983bf7d96988cf8ea2c2a83d467c8039b57bc26989fc60e37519a79d438",
+      "bytes": 185269,
+      "gzip_bytes": 71857
     },
     {
-      "path": "monitor-assets/monitor-CNKvYs80.js",
-      "sha256": "20ec6730b19c91e73bff3778b49380580787adf5b11ad9759332fa3b3ea82df5",
-      "bytes": 135772,
-      "gzip_bytes": 49477
+      "path": "monitor-assets/McpWorkspace-DBWuE-0g.css",
+      "sha256": "68f87246e85d0b1ca7f24e9003b2784fb02228b3a40b8f50eb477c23f570743d",
+      "bytes": 10282,
+      "gzip_bytes": 2793
+    },
+    {
+      "path": "monitor-assets/McpWorkspace-JaM-SFhf.js",
+      "sha256": "c6adb378cd567f33a2fb4c5f28d71d1731f28155be1d798787d2333c46b92a3a",
+      "bytes": 29962,
+      "gzip_bytes": 10499
+    },
+    {
+      "path": "monitor-assets/monitor-B9ZPm3IW.js",
+      "sha256": "a4b748e53e34d9265b1b80114d041a6930eea760a0c85262b617c48390d9405e",
+      "bytes": 136279,
+      "gzip_bytes": 49632
     },
     {
       "path": "monitor-assets/monitor-icon-DHaTF3UT.svg",
@@ -33,14 +39,20 @@
       "gzip_bytes": 169
     },
     {
+      "path": "monitor-assets/monitor-wnfHQpkx.css",
+      "sha256": "bb466cea854f71f7d088412bf759b64017ba916803bb25dcdb7598afd4f8b007",
+      "bytes": 37049,
+      "gzip_bytes": 8546
+    },
+    {
       "path": "monitor.html",
-      "sha256": "f28998eb5cba626a208e0407d9236f3947b2daf46924680620bd1b5d35012d8c",
+      "sha256": "d798bdb2cd73203a0dda25c2beea8af920627181071d0df9ea64de75a573552d",
       "bytes": 723,
-      "gzip_bytes": 460
+      "gzip_bytes": 461
     }
   ],
   "gzip": {
-    "javascript": 121334,
-    "css": 13992
+    "javascript": 131988,
+    "css": 16808
   }
 }

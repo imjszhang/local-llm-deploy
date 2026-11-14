@@ -6,6 +6,7 @@ import { consoleContext } from './app/context'
 import { isLocalConsole, requestLocalSession } from './shared/auth/localSession'
 import { readStoredKey, writeStoredKey } from './shared/auth/storedKey'
 const ChatWorkspace = defineAsyncComponent(() => import('./features/chat/ChatWorkspace.vue'))
+const McpWorkspace = defineAsyncComponent(() => import('./features/mcp/McpWorkspace.vue'))
 const credential = ref(''), credentialGeneration = ref(0)
 const credentialSource = ref<'none' | 'local' | 'manual'>('none'), localConnecting = ref(false)
 let applyingLocal = false, disposed = false, localRequest: AbortController | null = null
@@ -48,9 +49,15 @@ async function connectLocal() {
   } finally { clearTimeout(timeout); localRequest = null; localConnecting.value = false }
 }
 provide(consoleContext, { monitor, credential, credentialGeneration, credentialSource, localConnecting, connectLocal })
-const chat = ref(location.hash.startsWith('#/chat'))
+function currentWorkspace() {
+  if (location.hash.startsWith('#/chat')) return 'chat'
+  if (location.hash.startsWith('#/mcp') || (!location.hash && location.pathname.startsWith('/mcp-hub'))) return 'mcp'
+  return 'monitor'
+}
+const workspace = ref(currentWorkspace())
+const chat = ref(workspace.value === 'chat')
 const visitedChat = ref(chat.value)
-function navigate() { chat.value = location.hash.startsWith('#/chat'); visitedChat.value ||= chat.value }
+function navigate() { workspace.value = currentWorkspace(); chat.value = workspace.value === 'chat'; visitedChat.value ||= chat.value }
 onMounted(async () => {
   window.addEventListener('hashchange', navigate)
   const stored = readStoredKey()
@@ -61,14 +68,16 @@ onMounted(async () => {
 onBeforeUnmount(() => { disposed = true; localRequest?.abort(); window.removeEventListener('hashchange', navigate); monitor.stop() })
 </script>
 <template>
-  <nav class="workspace-nav" :class="{ 'workspace-nav--chat': chat }" aria-label="工作区">
+  <nav class="workspace-nav" :class="{ 'workspace-nav--chat': chat || workspace === 'mcp' }" aria-label="工作区">
     <a href="/">应用首页</a>
-    <a href="#/monitor" :aria-current="!chat ? 'page' : undefined">运行监控</a>
+    <a href="#/monitor" :aria-current="workspace === 'monitor' ? 'page' : undefined">运行监控</a>
     <a href="#/chat" :aria-current="chat ? 'page' : undefined">模型对话</a>
+    <a href="#/mcp" :aria-current="workspace === 'mcp' ? 'page' : undefined">MCP Hub</a>
     <span>LOCAL LLM · 本地工作台</span>
   </nav>
-  <div v-show="!chat"><MonitorWorkspace /></div>
+  <div v-show="workspace === 'monitor'"><MonitorWorkspace /></div>
   <ChatWorkspace v-if="visitedChat" v-show="chat" />
+  <McpWorkspace v-if="workspace === 'mcp'" />
 </template>
 <style>
 .workspace-nav{display:flex;align-items:center;gap:8px;padding:10px 24px;border-bottom:1px solid #29343d;background:#10171c;color:#a9bac5}
@@ -78,5 +87,5 @@ onBeforeUnmount(() => { disposed = true; localRequest?.abort(); window.removeEve
 .workspace-nav--chat{background:#f7f8fc;border-color:#e4e7ef;color:#626b80}
 .workspace-nav--chat a[aria-current=page]{background:#eaeafd;color:#4338ca;font-weight:600}
 .workspace-nav--chat a:focus-visible{outline:2px solid #6366f1;outline-offset:2px}
-@media(max-width:600px){.workspace-nav{padding:8px}.workspace-nav span{display:none}}
+@media(max-width:600px){.workspace-nav{padding:8px;gap:4px;overflow-x:auto}.workspace-nav a{padding:8px 10px;white-space:nowrap;font-size:13px}.workspace-nav span{display:none}}
 </style>

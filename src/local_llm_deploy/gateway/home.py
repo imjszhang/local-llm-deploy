@@ -25,7 +25,7 @@ def _card(alias: str, href: str, label: str, shown: str) -> str:
 
 
 def render_home(apps, proxies=None) -> bytes:
-    entries = []
+    entries = [('MCP Hub', 'mcp-hub', '/mcp-hub/', '/mcp-hub/', '局域网工具服务管理')]
     for spec in (apps or {}).values():
         entries.append((spec.alias, spec.key, spec.endpoint, spec.endpoint, KIND_LABELS.get(spec.kind, spec.kind)))
     for spec in (proxies or {}).values():

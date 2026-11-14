@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "revision": 0,
+  "listen": {
+    "host": "0.0.0.0",
+    "port": 8899,
+    "public_url": ""
+  },
+  "allowed_origins": [],
+  "services": []
+}

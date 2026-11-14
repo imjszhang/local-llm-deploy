@@ -46,16 +46,17 @@ def wants_html(accept) -> bool:
     return json_at < 0 or html_at < json_at
 
 
-def build_guide(apps, proxies, specs, discovered) -> dict:
+def build_guide(apps, proxies, specs, discovered, *, mcp_hub=None) -> dict:
     applications = [_app(spec) for spec in (apps or {}).values()]
     services = [_service(spec) for spec in (proxies or {}).values()]
     models = _models(specs or {}, discovered or {})
     return {
         'title': '本地网关说明',
-        'summary': '这里是当前登记的应用、外部服务和模型接口。模型接口需要在请求头带上网关密钥。本说明可以直接打开。',
+        'summary': '这里是当前登记的应用、外部服务、MCP 服务和模型接口。模型接口使用网关密钥，MCP 使用独立设备令牌。本说明可以直接打开。',
         'apps': sorted(applications, key=lambda item: (item['alias'], item['key'])),
         'services': sorted(services, key=lambda item: (item['alias'], item['key'])),
         'models': models,
+        'mcp_hub': mcp_hub,
         'interfaces': _interfaces(models),
     }
 
@@ -64,6 +65,7 @@ def render_guide(payload: dict) -> bytes:
     sections = [
         _section('应用', payload['apps'], '当前没有登记应用。', lambda item: (item['alias'], item['path'], item['summary'])),
         _section('外部服务', payload['services'], '当前没有登记外部服务。', lambda item: (item['alias'], item['path'], item['summary'])),
+        _mcp_section(payload.get('mcp_hub')),
         _section('模型', payload['models'], '当前没有登记模型。', _model_line),
         _section('模型接口', payload['interfaces'], '当前没有可调用的模型接口。', _interface_line),
     ]
@@ -80,11 +82,18 @@ def render_guide(payload: dict) -> bytes:
     main {{ max-width:820px; margin:0 auto; padding:40px 24px 72px; }}
     h1 {{ margin:0 0 8px; font-size:32px; letter-spacing:-.04em; }}
     h2 {{ margin:32px 0 12px; font-size:13px; letter-spacing:.12em; color:var(--muted); font-weight:650; }}
+    h3 {{ margin:24px 0 10px; font-size:18px; }}
     p {{ margin:0 0 12px; }}
     .lead {{ color:var(--muted); }}
     article {{ padding:14px 0; border-top:1px solid var(--line); }}
     strong {{ display:block; }}
-    code {{ color:var(--muted); font-family:ui-monospace, monospace; font-size:13px; }}
+    code {{ color:var(--muted); font-family:ui-monospace, monospace; font-size:13px; overflow-wrap:anywhere; }}
+    pre {{ margin:10px 0 18px; padding:16px; border:1px solid var(--line); border-radius:8px; background:white; overflow-x:auto; }}
+    pre code {{ color:var(--ink); overflow-wrap:normal; white-space:pre; }}
+    details {{ padding:10px 0; border-top:1px solid var(--line); }}
+    summary {{ cursor:pointer; font-weight:600; }}
+    details p {{ margin:8px 0; }}
+    li {{ margin:10px 0; }}
     a {{ color:#4338ca; }}
   </style>
 </head>
@@ -208,6 +217,61 @@ def _interface_line(item):
     models = '、'.join(item['models'])
     detail = item['summary'] + '认证：' + item['auth'] + ('。模型：' + models + '。' if models else '。')
     return item['method'] + ' ' + item['path'], '', detail
+
+
+def _mcp_section(hub):
+    title = '<h2>MCP Hub 服务</h2>'
+    if not hub:
+        return title + '<p>当前没有登记 MCP 服务。</p>'
+    states = {'disabled': '未启用', 'pending_restart': '等待应用配置', 'upstream_unavailable': '远端不可达',
+              'unavailable': '当前不可用', 'unknown': '状态未确认', 'starting': '启动中',
+              'error': '连接异常', 'stopped': '已停止', 'stale': '状态已过期', 'unhealthy': '连接异常'}
+    rows = []
+    for item in hub['services']:
+        state = '当前可用' if item['available'] else states.get(item['status'], '状态未确认')
+        detail = state + ' · ' + item['kind'] + ' · Streamable HTTP。'
+        if item['tool_count'] is not None:
+            detail += f'服务目录 {item["tool_count"]} 个工具，实际可用工具由设备权限决定。'
+        rows.append(_article(item['name'] + ' · ' + item['id'], item['url'] or '连接地址暂不可用', detail))
+    if not rows:
+        rows.append('<p>当前没有登记 MCP 服务。</p>')
+    if hub['aggregate']:
+        rows.append(_article('多个服务共用一个连接', hub['aggregate']['url'] or '', hub['aggregate']['summary']))
+    details = '<p>' + html.escape(hub['authentication']['summary']) + '</p>'
+    details += '<p>' + html.escape(' '.join(item['name'] + '：' + item['summary'] for item in hub['permissions'])) + '</p>'
+    return (title + '<p>' + html.escape(hub['summary']) + '</p>' + details
+            + '<p><a href="/mcp-hub/">打开 Hub 管理页面</a></p>' + ''.join(rows)
+            + _mcp_setup(hub))
+
+
+def _mcp_setup(hub):
+    setup = hub.get('token_setup')
+    if not setup:
+        return ''
+    sections = ['<h3>' + html.escape(setup['title']) + '</h3><ol>']
+    for step in setup['steps']:
+        sections.append('<li><strong>' + html.escape(step['title']) + '</strong>'
+                        + html.escape(step['detail']) + '</li>')
+    sections.append('</ol><h3>MCP 连接配置示例</h3>')
+    for note in hub.get('connection_notes', []):
+        sections.append('<p>' + html.escape(note) + '</p>')
+    examples = hub.get('connection_examples', [])
+    if not examples:
+        sections.append('<p>当前没有可生成配置示例的服务地址；请先由管理员配置并启用服务，再从可访问 Hub 的地址打开本说明。</p>')
+    for example in examples:
+        sections.append('<h3>' + html.escape(example['name'] + ' · ' + example['service_id']) + '</h3>')
+        if not example['available']:
+            sections.append('<p>此入口当前未就绪；配置示例可提前保存，连接前请先确认上方服务状态。</p>')
+        for config in example['configs']:
+            sections.append('<details><summary>' + html.escape(config['client']) + ' · <code>'
+                            + html.escape(config['config_file']) + '</code></summary>'
+                            + '<p>选择代码文本即可复制；合并到现有配置后替换令牌占位符。</p><pre><code>'
+                            + html.escape(config['content']) + '</code></pre></details>')
+    sections.append('<h3>确认接入成功</h3><ol>')
+    for step in hub.get('verification', []):
+        sections.append('<li>' + html.escape(step) + '</li>')
+    sections.append('</ol>')
+    return ''.join(sections)
 
 
 def _article(title, path, summary) -> str:

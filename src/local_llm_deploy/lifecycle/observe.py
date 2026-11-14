@@ -151,7 +151,7 @@ def legacy_command_matches(identity: ProcessIdentity, paths, key: str, spec=None
 
 
 def health_ready(host: str, port: int, path: str = "/health", *, timeout: float = 1.0, headers=None) -> bool:
-    connect_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    connect_host = "127.0.0.1" if host == "0.0.0.0" else "::1" if host == "::" else host
     authority = f"[{connect_host}]" if ":" in connect_host else connect_host
     try:
         req = urllib.request.Request(f"http://{authority}:{port}{path}", headers=headers or {})

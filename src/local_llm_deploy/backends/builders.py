@@ -54,7 +54,7 @@ def _python(paths, backend, runtime, env):
 
 def launchd_settings(key, backend):
     labels = {"jina-embed": "jina-embed", "jina-rerank-mlx": "jina-rerank",
-              "whisper-large-v3": "whisper", "serve-ui": "serve-ui", "ds4": "ds4"}
+              "whisper-large-v3": "whisper", "serve-ui": "serve-ui", "ds4": "ds4", "mcp-hub": "mcp-hub"}
     # Existing labels are stable. Other models get their own model-key label.
     label = "com.local-llm-deploy." + labels.get(key, "model." + key)
     autostart = backend in ("transformers_embedding", "mlx_rerank", "mlx_whisper", "gateway")
@@ -179,6 +179,27 @@ def build_gateway(paths, options=None, *, env=None, validate=True):
                        paths.root, service_env, host, port, paths.logs / "serve-ui.log", paths.run / "serve-ui.pid",
                        _option(options, "management", "launchd"), "/api/models", float(_option(options, "timeout", 30)),
                        "com.local-llm-deploy.serve-ui", True, False)
+    return _check(spec) if validate else spec
+
+
+def build_mcp_hub(paths, options=None, *, env=None, validate=True):
+    """Build the independent Hub without importing its MCP runtime dependencies."""
+    from ..mcp_hub.config import HubConfigStore, validate_config
+    env = dict(os.environ if env is None else env)
+    config = HubConfigStore(paths).load()
+    config["listen"]["host"] = _value(options, "host", env, ["MCP_HUB_HOST"], config["listen"]["host"])
+    config["listen"]["port"] = int(_value(options, "port", env, ["MCP_HUB_PORT"], config["listen"]["port"]))
+    listen = validate_config(config)["listen"]
+    interpreter = env.get("MCP_HUB_PYTHON") or str(paths.root / ".venv-mcp-hub" / "bin" / "python")
+    interpreter = str(_absolute(interpreter, paths.root)) if "/" in interpreter else (shutil.which(interpreter) or interpreter)
+    service_env = {"LOCAL_LLM_ROOT": str(paths.root), "LOCAL_LLM_MANAGED_INSTANCE": "1"}
+    argv = (interpreter, "-m", "local_llm_deploy.mcp_hub.server", "--project-root", str(paths.root),
+            "--host", listen["host"], "--port", str(listen["port"]))
+    management = _option(options, "management", "launchd" if sys.platform == "darwin" else "process")
+    spec = ServiceSpec("mcp-hub", "MCP Hub", argv, paths.root, service_env, listen["host"], listen["port"],
+                       paths.logs / "mcp-hub.log", paths.run / "mcp-hub.pid", management,
+                       "/health", float(_option(options, "timeout", 30)),
+                       "com.local-llm-deploy.mcp-hub", True, False)
     return _check(spec) if validate else spec
 
 

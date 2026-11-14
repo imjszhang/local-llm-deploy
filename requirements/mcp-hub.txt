@@ -1,0 +1,3 @@
+# Install from the repository root into .venv-mcp-hub (FastMCP 4.2 requires Python 3.11+).
+# Validated on Python 3.14 with -c constraints/mcp-hub-macos-py314.txt.
+-e .[mcp-hub]

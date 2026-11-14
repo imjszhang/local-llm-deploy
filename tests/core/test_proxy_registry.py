@@ -17,7 +17,7 @@ from local_llm_deploy.storage import atomic_json
 def proxy_cfg(**overrides):
     cfg = {
         "type": "proxy",
-        "alias": "ComfyUI",
+        "alias": "Service Tool",
         "upstream": "http://192.168.0.20:8188",
         "health_path": "/system_stats",
         "timeout": 120,
@@ -33,25 +33,25 @@ def proxy_cfg(**overrides):
 
 class ProxyRegistryTests(unittest.TestCase):
     def test_normalize_models_skips_proxy_entries(self):
-        specs = normalize_models({"chat": {"alias": "chat-alias"}, "comfyui": proxy_cfg()})
+        specs = normalize_models({"chat": {"alias": "chat-alias"}, "tool": proxy_cfg()})
         self.assertEqual(set(specs), {"chat"})
-        self.assertNotIn("comfyui", specs)
+        self.assertNotIn("tool", specs)
 
     def test_normalize_registry_keeps_proxy_and_rejects_alias_clash(self):
-        models, proxies, apps = normalize_registry({"chat": {"alias": "chat-alias"}, "comfyui": proxy_cfg()})
+        models, proxies, apps = normalize_registry({"chat": {"alias": "chat-alias"}, "tool": proxy_cfg()})
         self.assertEqual(set(models), {"chat"})
-        self.assertEqual(set(proxies), {"comfyui"})
+        self.assertEqual(set(proxies), {"tool"})
         self.assertEqual(apps, {})
-        self.assertEqual(proxies["comfyui"].prefix, "/services/comfyui")
+        self.assertEqual(proxies["tool"].prefix, "/services/tool")
         bearer = proxy_cfg(auth={"gateway": "api_key", "upstream": "bearer", "bearer": "upstream-token", "console": False})
-        self.assertEqual(normalize_proxy("comfyui", bearer).auth_upstream, "bearer")
-        self.assertEqual(normalize_proxy("comfyui", bearer).raw["auth"]["bearer"], "upstream-token")
-        self.assertEqual(proxies["comfyui"].host, "192.168.0.20")
-        self.assertEqual(proxies["comfyui"].port, 8188)
+        self.assertEqual(normalize_proxy("tool", bearer).auth_upstream, "bearer")
+        self.assertEqual(normalize_proxy("tool", bearer).raw["auth"]["bearer"], "upstream-token")
+        self.assertEqual(proxies["tool"].host, "192.168.0.20")
+        self.assertEqual(proxies["tool"].port, 8188)
         with self.assertRaises(ConfigError):
-            normalize_registry({"chat": {"alias": "ComfyUI"}, "comfyui": proxy_cfg()})
+            normalize_registry({"chat": {"alias": "Service Tool"}, "tool": proxy_cfg()})
         with self.assertRaises(ConfigError):
-            normalize_registry({"comfyui": {"alias": "same"}, "other": proxy_cfg(alias="same")})
+            normalize_registry({"tool": {"alias": "same"}, "other": proxy_cfg(alias="same")})
 
     def test_invalid_proxy_shapes_are_rejected(self):
         for bad in (
@@ -76,29 +76,29 @@ class ProxyRegistryTests(unittest.TestCase):
         ):
             with self.subTest(bad=bad):
                 with self.assertRaises(ConfigError):
-                    normalize_proxy("comfyui", proxy_cfg(**bad))
+                    normalize_proxy("tool", proxy_cfg(**bad))
 
     def test_dump_and_disk_round_trip_retain_proxy(self):
-        raw = {"chat": {"alias": "chat-alias"}, "comfyui": proxy_cfg(), "_comment": "ignored"}
+        raw = {"chat": {"alias": "chat-alias"}, "tool": proxy_cfg(), "_comment": "ignored"}
         dumped = dump_registry(raw)
-        self.assertIn("comfyui", dumped)
-        self.assertEqual(dumped["comfyui"]["type"], "proxy")
+        self.assertIn("tool", dumped)
+        self.assertEqual(dumped["tool"]["type"], "proxy")
         self.assertNotIn("_comment", dumped)
         with tempfile.TemporaryDirectory() as temporary:
             paths = ProjectPaths(Path(temporary))
             atomic_json(paths.registry, dumped)
             self.assertEqual(set(load_specs(paths.registry)), {"chat"})
             self.assertEqual(set(load_models(paths.registry)), {"chat"})
-            self.assertEqual(set(load_proxies(paths.registry)), {"comfyui"})
+            self.assertEqual(set(load_proxies(paths.registry)), {"tool"})
             models, proxies = load_catalog(paths.registry)
             self.assertEqual(set(models), {"chat"})
-            self.assertEqual(proxies["comfyui"].upstream, "http://192.168.0.20:8188")
+            self.assertEqual(proxies["tool"].upstream, "http://192.168.0.20:8188")
             registry = Registry(paths)
             registry.update(lambda data: data.update({"extra": proxy_cfg(alias="Other", upstream="http://127.0.0.1:9")}))
             saved = json.loads(paths.registry.read_text(encoding="utf-8"))
-            self.assertEqual(set(saved), {"chat", "comfyui", "extra"})
+            self.assertEqual(set(saved), {"chat", "tool", "extra"})
             self.assertEqual(set(registry.specs()), {"chat"})
-            self.assertEqual(set(registry.proxies()), {"comfyui", "extra"})
+            self.assertEqual(set(registry.proxies()), {"tool", "extra"})
 
 
 if __name__ == "__main__":
