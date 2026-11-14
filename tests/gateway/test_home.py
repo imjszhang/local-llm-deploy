@@ -13,6 +13,7 @@ class HomePageTests(unittest.TestCase):
             {'video': SimpleNamespace(alias='视频库', key='video', endpoint='/video/', kind='video')},
             {'civ2': SimpleNamespace(alias='civ2agent', key='civ2', prefix='/services/civ2', upstream='http://192.168.0.75:4732')},
         ).decode()
+        self.assertIn('href="/api/guide"', page)
         self.assertIn('href="/video/"', page)
         self.assertIn('href="/services/civ2/"', page)
         self.assertIn('外部服务', page)

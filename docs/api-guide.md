@@ -14,7 +14,7 @@
 - `/agents-api/v1/snapshot` 本机探员会话快照。
 - `/services/<key>/*` 外部 HTTP 服务反代。
 
-仅 `GET/HEAD /api/models` 和 `/api/system` 作为明确的只读监控例外。监控和对话页手动输入的 API Key 保存在该浏览器来源的本地存储中，刷新后优先读取，可再修改或清除；不写入静态资源或 URL。本机自动连接使用的临时会话不会写入这份存储。
+仅 `GET/HEAD /api/models`、`/api/system` 和 `/api/guide` 作为明确的只读公开例外。`/api/guide` 说明当前应用、外部服务和模型接口；浏览器打开是页面，请求 `application/json` 时返回同一份内容。它不包含上游地址、端口、进程或凭据。监控和对话页手动输入的 API Key 保存在该浏览器来源的本地存储中，刷新后优先读取，可再修改或清除；不写入静态资源或 URL。本机自动连接使用的临时会话不会写入这份存储。
 
 `type: app` 条目登记网关应用入口，与 `type: proxy` 的 `/services/<key>/` 分开。未登记的前缀不挂载。`/knowledge/` 保持独立凭据语义：转发知识库客户端 Authorization，不用模型 Key 覆盖。
 
@@ -24,7 +24,7 @@
 
 应用也可以自行登记一个和知识库同类的 HTTP 入口。`PUT /gateway-api/v1/apps/<键>` 使用模型 API Key，正文为 `alias`、`prefix`、`upstream`；网关把 `/prefix/` 反代到该上游并转发客户端 Authorization。记录写在被忽略的 `data/gateway-apps.json`，不进入 Git。`DELETE` 同一路径即卸下。`./manage.sh apps list|remove` 管理这份本机登记。`kind` 里 `knowledge`、`video`、`monitor`、`agents` 使用各自的专用实现；自行注册固定为 `http`，不能覆盖 `models.json` 里已有的键或路径。
 
-`/services/<key>/` 使用模型 API Key；默认不转发 `Authorization`（`auth.upstream=none`），控制台 session 不能当业务凭证。`websocket: true` 开启 WebSocket 双向透传，否则升级请求返回 501。默认未探活返回 503；`health_check: false` 跳过转发前探活，直接访问上游。未知键或未允许路径返回 404。这些键不出现在 `GET /v1/models`。
+`/services/<key>/` 使用模型 API Key。`auth.upstream` 决定上游 `Authorization`：`none` 不发送，`forward_client` 原样转发客户端带来的值，`bearer` 改送该服务自己的 `auth.bearer`。控制台 session 不能当业务凭证。`home_query` 只拼在首页链接上，不参与上游认证。`websocket: true` 开启 WebSocket 双向透传，否则升级请求返回 501。默认未探活返回 503；`health_check: false` 跳过转发前探活，直接访问上游。未知键或未允许路径返回 404。这些键不出现在 `GET /v1/models`。
 
 网关入口 Key 与后端 Key 可以不同。转发和健康探测按“运行实例记录的 `api_key_file` → 模型 `runtime.api_key_file` → 项目 `.api-key`”读取后端凭据；PID 只记录文件引用和来源。通过 `--api-key` / `API_KEY` 启动的内联密钥不能由另一个网关进程可靠恢复，直连仍可使用，代理会返回不可用诊断；需要代理时改用 `--api-key-file` / `API_KEY_FILE`，或配置 `runtime.api_key_file` 后重新启动。缺失凭据文件也会显示在监控 `unavailable_backends` 中，不向客户端暴露密钥。
 
@@ -32,6 +32,7 @@
 
 | 路径 | 用途 | 模型能力 |
 | --- | --- | --- |
+| `GET /api/guide` | 当前应用、外部服务和模型接口说明 | 不属于模型 API |
 | `GET /v1/models` | 当前可路由模型键与别名 | 所有在线模型 |
 | `POST /v1/chat/completions` | Chat JSON / SSE | chat |
 | `POST /v1/completions` | 文本补全 | chat |

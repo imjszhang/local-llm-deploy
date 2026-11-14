@@ -43,6 +43,9 @@ class ProxyRegistryTests(unittest.TestCase):
         self.assertEqual(set(proxies), {"comfyui"})
         self.assertEqual(apps, {})
         self.assertEqual(proxies["comfyui"].prefix, "/services/comfyui")
+        bearer = proxy_cfg(auth={"gateway": "api_key", "upstream": "bearer", "bearer": "upstream-token", "console": False})
+        self.assertEqual(normalize_proxy("comfyui", bearer).auth_upstream, "bearer")
+        self.assertEqual(normalize_proxy("comfyui", bearer).raw["auth"]["bearer"], "upstream-token")
         self.assertEqual(proxies["comfyui"].host, "192.168.0.20")
         self.assertEqual(proxies["comfyui"].port, 8188)
         with self.assertRaises(ConfigError):
@@ -63,6 +66,8 @@ class ProxyRegistryTests(unittest.TestCase):
             {"methods": ["TRACE"]},
             {"auth": {"gateway": "none"}},
             {"auth": {"upstream": "basic"}},
+            {"auth": {"upstream": "bearer"}},
+            {"auth": {"upstream": "none", "bearer": "upstream-token"}},
             {"websocket": "true"},
             {"browser": 1},
             {"health_check": "false"},

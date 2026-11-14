@@ -159,6 +159,34 @@ class ServiceProxyTests(unittest.TestCase):
         self.assertEqual(self.state.requests[-1][0], 'POST')
         self.assertNotIn('Authorization', {key.title(): value for key, value in self.state.requests[-1][3].items()})
 
+    def _use_auth(self, upstream, bearer=None):
+        auth = {'gateway': 'api_key', 'upstream': upstream, 'console': False}
+        if bearer is not None:
+            auth['bearer'] = bearer
+        self.proxy = normalize_proxy('tool', {**self.proxy.raw, 'auth': auth})
+        self.context.proxies = {'tool': self.proxy}
+        self.context.proxy_catalog.update({'tool': self.proxy})
+
+    def _sent_headers(self):
+        return {key.title(): value for key, value in self.state.requests[-1][3].items()}
+
+    def test_upstream_auth_modes_and_gateway_cookie_are_separate(self):
+        cookie = 'gateway_service_abc=1; upstream=ok'
+        self.assertEqual(self.request('/services/tool/system_stats', headers={'Cookie': cookie})[0], 200)
+        sent = self._sent_headers()
+        self.assertNotIn('Authorization', sent)
+        self.assertEqual(sent.get('Cookie'), 'upstream=ok')
+        self._use_auth('forward_client')
+        self.assertEqual(self.request('/services/tool/system_stats', headers={'Cookie': cookie})[0], 200)
+        sent = self._sent_headers()
+        self.assertEqual(sent.get('Authorization'), 'Bearer service-key')
+        self.assertEqual(sent.get('Cookie'), 'upstream=ok')
+        self._use_auth('bearer', 'upstream-token')
+        self.assertEqual(self.request('/services/tool/system_stats', headers={'Cookie': cookie})[0], 200)
+        sent = self._sent_headers()
+        self.assertEqual(sent.get('Authorization'), 'Bearer upstream-token')
+        self.assertNotIn('gateway_service_', sent.get('Cookie', ''))
+
     def test_missing_key_and_console_session_are_rejected(self):
         status, _, _ = self.request('/services/tool/system_stats', headers={'Authorization': ''})
         self.assertEqual(status, 401)

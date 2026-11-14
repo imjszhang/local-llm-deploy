@@ -244,8 +244,14 @@ def normalize_proxy(key: str, value: Any) -> ProxySpec:
     console = auth.get("console", False)
     if gateway != "api_key":
         raise ConfigError(f"{key}: auth.gateway 目前只支持 api_key")
-    if upstream_auth not in ("none", "forward_client"):
-        raise ConfigError(f"{key}: auth.upstream 必须是 none 或 forward_client")
+    if upstream_auth not in ("none", "forward_client", "bearer"):
+        raise ConfigError(f"{key}: auth.upstream 必须是 none、forward_client 或 bearer")
+    bearer = auth.get("bearer")
+    if upstream_auth == "bearer":
+        if not isinstance(bearer, str) or not re.fullmatch(r"[A-Za-z0-9._~-]+", bearer):
+            raise ConfigError(f"{key}: auth.bearer 必须是非空且不含分隔符的令牌")
+    elif bearer is not None:
+        raise ConfigError(f"{key}: 只有 auth.upstream=bearer 才能声明 auth.bearer")
     if type(console) is not bool:
         raise ConfigError(f"{key}: auth.console 必须是布尔值")
     if "websocket" in cfg and type(cfg["websocket"]) is not bool:

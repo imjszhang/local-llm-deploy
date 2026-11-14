@@ -123,7 +123,7 @@ def session_cookie(handler, spec):
 def upstream_headers(handler, spec):
     headers = dict(handler.headers)
     for name in list(headers):
-        if name.lower() == 'authorization' and (spec.auth_upstream == 'none' or
+        if name.lower() == 'authorization' and (spec.auth_upstream in ('none', 'bearer') or
                                                 (spec.raw.get('browser') and headers[name].startswith('Basic '))):
             del headers[name]
         elif name.lower() == 'cookie':
@@ -134,6 +134,8 @@ def upstream_headers(handler, spec):
                 headers[name] = value
             else:
                 del headers[name]
+    if spec.auth_upstream == 'bearer':
+        headers['Authorization'] = 'Bearer ' + spec.raw['auth']['bearer']
     # ComfyUI compares Origin with Host; the HTTP transport sends the upstream Host.
     if spec.raw.get('browser') and same_origin(handler):
         for name in list(headers):

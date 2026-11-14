@@ -22,6 +22,7 @@ from local_llm_deploy.observability import AccessLogger, log
 from .app_registry import AppRegistrationStore, load_mounted_apps
 from .apps import (knowledge_backend_url, knowledge_timeout, knowledge_upstream,
                    match_app, matches_prefix, rewrite_legacy, slash_redirect)
+from .guide import build_guide, render_guide, wants_html
 from .home import render_home
 from .mounted_auth import MountedAppAuth, enabled as mounted_auth_enabled, SESSION as APP_SESSION
 from .auth import ApiAuth, BackendAuthError, ConsoleSessions, backend_credentials
@@ -162,6 +163,9 @@ class GatewayContext:
         return router.resolve(path, method, body, headers, models, unavailable)
 
 
+PUBLIC_READ_API = frozenset(('/api/models', '/api/system', '/api/guide'))
+
+
 class ProxyHandler(SimpleHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
@@ -240,7 +244,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 self._console_session_target(normalize_proxy_path(self.path))
             if path == '/chat-api' or path.startswith('/chat-api/'):
                 self._chat_request_target(normalize_proxy_path(self.path))
-            if (path.startswith(('/api/', '/v1/', '/monitor-api/', '/gateway-api/')) or path in ('/monitor-api', '/gateway-api')) and path not in ('/api/models', '/api/system'):
+            if (path.startswith(('/api/', '/v1/', '/monitor-api/', '/gateway-api/')) or path in ('/monitor-api', '/gateway-api')) and path not in PUBLIC_READ_API:
                 if not self._authorized(path):
                     self.close_connection = True
                     writer.error(401, 'Invalid API key', code='invalid_request_error')
@@ -545,6 +549,16 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         if self.command != 'HEAD':
             self.wfile.write(body)
 
+    def _send_guide(self, writer):
+        ctx = self.context
+        with ctx._catalog_lock:
+            apps, proxies, specs = dict(ctx.apps), dict(ctx.proxies), dict(ctx.specs)
+        payload = build_guide(apps, proxies, specs, ctx.discovery.models())
+        if wants_html(self.headers.get('Accept')):
+            self._send_document(render_guide(payload))
+            return
+        self._json(writer, payload)
+
     def _json(self, writer, payload):
         writer.start(200, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'})
         writer.write(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode())
@@ -691,11 +705,14 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     writer.error(405, 'Method not allowed')
                 return
             ctx.refresh()
-            # The only unauthenticated API routes are these two exact, read-only
-            # monitor endpoints. Every default, named and Ollama proxy is gated.
-            if path in ('/api/models', '/api/system'):
+            # These exact read-only routes stay open. Every other /api and /v1
+            # route, including named and Ollama proxies, requires the gateway key.
+            if path in PUBLIC_READ_API:
                 if self.command not in ('GET', 'HEAD'):
                     raise RoutingError(405, 'Read-only endpoint')
+                if path == '/api/guide':
+                    self._send_guide(writer)
+                    return
                 self._json(writer, ctx.monitoring.models() if path == '/api/models' else ctx.monitoring.system())
                 return
             if not self._authorized(path):

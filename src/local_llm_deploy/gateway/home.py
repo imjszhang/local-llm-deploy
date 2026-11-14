@@ -58,11 +58,13 @@ def render_home(apps, proxies=None) -> bytes:
     em, code {{ display:block; color:var(--muted); font-style:normal; font-size:12px; }}
     code {{ margin-top:2px; font-family:ui-monospace, monospace; }}
     .open {{ margin-left:auto; color:var(--accent); font-size:13px; white-space:nowrap; }}
+    a.guide {{ color:var(--accent); text-decoration:none; white-space:nowrap; }}
   </style>
 </head>
 <body>
   <header>
     <div><h1>本地网关</h1><p>从这里进入已登记的应用，或打开监控和对话。</p></div>
+    <a class="guide" href="/api/guide">接口说明</a>
   </header>
   <main>
     <h2>应用</h2>
