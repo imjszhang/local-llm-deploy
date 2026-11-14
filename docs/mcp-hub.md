@@ -303,3 +303,9 @@ HTTP 单文件上限为 512 MiB。客户端下载时拒绝覆盖已有文件，�
 与 8888 一样，在 `ovpn-socks-proxy` 的 HK 实例发布 8899：`MCP_PUBLISH_PORT=8899`，防火墙输入端口为 `8888,8899`。对端使用 `http://<HK tun IP>:8899/mcp/comfyui`，仍需独立设备令牌。
 
 Hub 私有配置的顶层 `allowed_hosts` 可填写额外可信 IP（例如 `["10.8.0.5"]`），用于 VPN TCP 转发保留原始 Host 的场景；不接受通配符或网段。`listen.public_url` 留空时，8888 管理页和 guide 根据访问主机生成地址，同时适配物理局域网和 VPN。保存配置并重启 Hub 后生效。VPN 地址变化时需更新白名单；该设置不放宽令牌、Origin 或内部接口的限制。
+
+#### VPN 转发与本机自动登录
+
+8888 必须通过标记请求来源的 HTTP 反向代理发布。`ovpn-socks-proxy` 的 Nginx 配置固定覆盖 `Forwarded` / `Via` / `X-Forwarded-*`、移除 `X-Local-Console`，并拒绝 `/console-api` 路径。不能使用透明 TCP 转发来发布允许本机免登录的网关：Docker Desktop 可能使上游连接看起来来自回环地址。
+
+本机直连 `localhost:8888` 仍可自动登录；VPN 使用网关 Bearer 凭据，8899 使用独立 MCP 设备令牌。部署修复后重启 8888，清除此前签发的本机会话。管理员 `.api-key` 应使用 `0600` 权限（`chmod 600 .api-key`），不要将其或测试令牌提交 Git。

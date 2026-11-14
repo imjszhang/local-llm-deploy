@@ -153,6 +153,23 @@ class ConsoleHTTPTests(unittest.TestCase):
         self.assertNotIn('synthetic-console-root-key', body.decode())
         return value['token']
 
+    def test_vpn_proxy_markers_deny_local_grants_but_preserve_explicit_key(self):
+        token = self.issue()
+        # A Docker proxy can have a loopback peer and a forged localhost Host.
+        # Server-owned forwarding markers must gate issuance AND every use.
+        for marker in ({'Via': '1.1 vpn-ingress'},
+                       {'Forwarded': 'for=unknown;by=vpn-ingress'},
+                       {'X-Forwarded-For': '127.0.0.1'}):
+            headers = {**self.local_headers, **marker, 'Sec-Fetch-Site': 'same-origin'}
+            with self.subTest(marker=marker):
+                self.assertEqual(self.request('/console-api/v1/session', headers=headers, method='POST')[0], 403)
+                for path in ('/monitor-api/v1/snapshot', '/chat-api/v1/sessions'):
+                    self.assertEqual(self.request(path, headers={**headers, 'Authorization': 'Bearer ' + token})[0], 401)
+                self.assertEqual(self.request('/monitor-api/v1/snapshot', headers={
+                    **headers, 'Authorization': 'Bearer synthetic-console-root-key'})[0], 200)
+        self.assertEqual(self.request('/monitor-api/v1/snapshot', headers={
+            **self.local_headers, 'Authorization': 'Bearer ' + token})[0], 200)
+
     def test_automatic_session_monitor_and_chat_with_root_key_kept_server_side(self):
         token = self.issue()
         headers = {**self.local_headers, 'Authorization': 'Bearer ' + token}

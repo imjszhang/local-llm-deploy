@@ -107,7 +107,10 @@ class ConsoleSessions:
     def local_origin(cls, handler, *, issuing=False):
         headers = handler.headers
         # Reverse proxies are intentionally ineligible, even when their final
-        # connection to this server comes from a loopback socket.
+        # connection to this server comes from a loopback socket. A publishing
+        # proxy MUST overwrite these markers itself and strip X-Local-Console:
+        # Docker Desktop can make a transparent remote TCP relay appear local.
+        # Client-supplied Host/Origin headers cannot distinguish that relay.
         if any(name.lower() in ('forwarded', 'via', 'x-real-ip') or
                name.lower().startswith('x-forwarded-') for name in headers):
             return None
