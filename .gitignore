@@ -13,6 +13,7 @@ node_modules/
 frontend/test-results/
 frontend/playwright-report/
 frontend/coverage/
+frontend/dist-agents/
 
 # 模型与构建产物（llama.cpp 需单独 clone，见 README）
 models/

@@ -103,11 +103,11 @@ frontend/
 ### 构建产物
 
 **Bundle 大小：**
-- JavaScript：**125.4 KB gzip**（预算 320 KB）
+- JavaScript：**128.2 KB gzip**（预算 320 KB）
 - CSS：0 KB（所有样式内联）
 - 输出文件：
   - `static/agents.html`
-  - `static/agent-assets/agents-CALU3Qod.js`
+  - `static/agent-assets/agents-Du9Munei.js`
 
 ### 集成到 Gateway
 
@@ -306,7 +306,7 @@ npm run build:agents
 
 **构建产物：**
 - `static/agents.html`
-- `static/agent-assets/agents-CALU3Qod.js` (125.4 KB gzip)
+- `static/agent-assets/agents-Du9Munei.js` (128.2 KB gzip)
 - `static/agent-manifest.json`
 
 ## 开发者备注
@@ -320,5 +320,5 @@ npm run build:agents
 ---
 
 **完成时间**：2026-11-07  
-**Bundle 大小**：125.4 KB gzip (under 320 KB budget)  
+**Bundle 大小**：128.2 KB gzip (under 320 KB budget)
 **状态**：✅ 完成并验证
