@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -22,7 +23,7 @@ class HubConfigConflict(HubConfigError):
 def default_config():
     return {"schema_version": 1, "revision": 0,
             "listen": {"host": "0.0.0.0", "port": 8899, "public_url": ""},
-            "allowed_origins": [], "services": []}
+            "allowed_origins": [], "allowed_hosts": [], "services": []}
 
 
 def _text(value, field, *, empty=False, limit=8192):
@@ -81,6 +82,16 @@ def validate_config(raw):
         raise HubConfigError("listen.port 必须是 1–65535 的整数")
     _http_url(listen["public_url"], "listen.public_url", empty=True)
     result["listen"] = listen
+    hosts = result["allowed_hosts"]
+    if not isinstance(hosts, list) or len(hosts) > 100:
+        raise HubConfigError("allowed_hosts 必须是最多 100 项的 IP 地址列表")
+    try:
+        result["allowed_hosts"] = list(dict.fromkeys(str(ipaddress.ip_address(value))
+            for value in hosts if isinstance(value, str)))
+        if any(not isinstance(value, str) for value in hosts):
+            raise ValueError
+    except ValueError:
+        raise HubConfigError("allowed_hosts 必须只包含完整的 IP 地址，不支持通配符或网段") from None
     origins = result["allowed_origins"]
     if not isinstance(origins, list) or len(origins) > 100:
         raise HubConfigError("allowed_origins 必须是最多 100 项的列表")

@@ -35,6 +35,15 @@ http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
 
 
 class HubConfigTests(unittest.TestCase):
+    def test_explicit_forwarded_hosts(self):
+        config = default_config()
+        config['allowed_hosts'] = ['10.8.0.5', '10.8.0.5', '::1']
+        self.assertEqual(validate_config(config)['allowed_hosts'], ['10.8.0.5', '::1'])
+        for value in ['*', '10.8.0.0/24', 'http://10.8.0.5', '10.8.0.5:8899', 123, None]:
+            config['allowed_hosts'] = [value]
+            with self.assertRaises(HubConfigError):
+                validate_config(config)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="hub-config-")
         self.paths = ProjectPaths(Path(self.temp.name))

@@ -43,6 +43,7 @@ class Boundary:
             self.hosts.update(row[4][0].split('%')[0] for row in socket.getaddrinfo(socket.gethostname(), None))
         except OSError:
             pass
+        self.hosts.update(runtime.config.get('allowed_hosts', []))
         public = runtime.config['listen'].get('public_url')
         if public:
             self.hosts.add(urlsplit(public).hostname)

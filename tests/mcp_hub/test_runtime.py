@@ -59,6 +59,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.temp.cleanup)
         self.paths = ProjectPaths(Path(self.temp.name))
         config = default_config()
+        config["allowed_hosts"] = ["10.8.0.5"]
         config['services'] = [{'id': 'comfyui', 'name': 'Comfy', 'kind': 'comfyui', 'enabled': True,
                                'url': 'http://127.0.0.1:8188', 'command': '/fake', 'args': [], 'env': {}, 'allowed_tools': []}]
         self.bridge = FakeBridge()
@@ -101,6 +102,15 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_http_boundary_and_internal_control(self):
         self.assertEqual((await self.http.get('/health')).status_code, 200)
+        vpn = {'Host': '10.8.0.5:8899'}
+        self.assertEqual((await self.http.get('/health', headers=vpn)).status_code, 200)
+        self.assertEqual((await self.http.get('/assets', headers=vpn)).status_code, 401)
+        self.assertEqual((await self.http.get('/health', headers={'Host': '10.8.0.6:8899'})).status_code, 403)
+        self.assertEqual((await self.http.get('/health', headers={**vpn, 'Origin': 'https://evil.invalid'})).status_code, 403)
+        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=self.app, client=('192.168.65.1', 9999)),
+                                      base_url='http://10.8.0.5:8899') as forwarded:
+            self.assertEqual((await forwarded.get('/internal/status', headers={'X-Hub-Internal-Key': self.runtime.internal_key})).status_code, 403)
+
         self.assertEqual((await self.http.get('/assets')).status_code, 401)
         self.assertEqual((await self.http.get('/assets', headers={**self.headers(), 'Origin': 'https://evil.invalid'})).status_code, 403)
         self.assertEqual((await self.http.get('/assets', headers={**self.headers(), 'Host': 'evil.invalid'})).status_code, 403)
