@@ -6,6 +6,10 @@ import json
 import threading
 import time
 import unittest
+from email.message import Message
+from types import SimpleNamespace
+
+from local_llm_deploy.gateway.auth import ConsoleSessions
 from http.server import BaseHTTPRequestHandler
 
 from tests.gateway import test_gateway_app_registration as support
@@ -83,6 +87,48 @@ class MountedAuthTests(unittest.TestCase):
         self.assertEqual(signature, expected)
         self.assertEqual(self.raw('/notes/api/v1/gateway-session', 'DELETE', {**self.local(), 'Cookie': cookie})[0], 200)
         self.assertEqual(self.raw('/notes/api/v1/status', headers={'Cookie': cookie})[0], 401)
+
+    def test_lan_session_without_api_key_signs_upstream(self):
+        self.register()
+        origin = f'http://192.168.1.20:{self.gateway.server_port}'
+        headers = {**self.local(), 'Host': origin.removeprefix('http://'), 'Origin': origin}
+        status, response, _ = self.raw('/notes/api/v1/gateway-session', 'POST', headers)
+        self.assertEqual(status, 200)
+        cookie = response['Set-Cookie'].split(';')[0]
+        status, _, body = self.raw('/notes/api/v1/status', headers={**headers, 'Cookie': cookie})
+        self.assertEqual(status, 200)
+        self.assertIn(HEADER, json.loads(body)['headers'])
+
+    def test_vpn_ingress_session_requires_private_client_and_same_origin(self):
+        self.register()
+        authority = f'10.8.0.5:{self.gateway.server_port}'
+        headers = {**self.local(), 'Host': authority, 'Origin': 'http://' + authority,
+                   'Forwarded': 'for=unknown;by=vpn-ingress', 'Via': '1.1 vpn-ingress',
+                   'X-Forwarded-For': '10.8.0.6', 'X-Forwarded-Host': authority,
+                   'X-Forwarded-Proto': 'http'}
+        self.assertEqual(self.raw('/notes/api/v1/gateway-session', 'POST', headers)[0], 200)
+        for change in ({'X-Forwarded-For': '8.8.8.8'}, {'X-Forwarded-For': '10.8.0.6, 8.8.8.8'},
+                       {'Origin': 'http://evil.example'}, {'X-Forwarded-Host': 'localhost'},
+                       {'X-Local-Console': ''}, {'Authorization': 'Bearer wrong'}):
+            with self.subTest(change=change):
+                self.assertIn(self.raw('/notes/api/v1/gateway-session', 'POST',
+                                       {**headers, **change})[0], (401, 403))
+
+    def test_lan_peer_boundary_does_not_expand_console_access(self):
+        for peer in ('192.168.1.2', '10.1.2.3', '172.16.1.2', 'fd12::2', '::ffff:192.168.1.2',
+                     '8.8.8.8', '100.64.0.1', '169.254.1.2', '0.0.0.0'):
+            headers = Message()
+            for key, value in {'Host': '192.168.1.20:8888', 'Origin': 'http://192.168.1.20:8888',
+                               'X-Local-Console': '1', 'Sec-Fetch-Site': 'same-origin'}.items():
+                headers[key] = value
+            handler = SimpleNamespace(headers=headers, client_address=(peer, 1234),
+                                      server=SimpleNamespace(server_port=8888))
+            with self.subTest(peer=peer):
+                expected = peer not in ('8.8.8.8', '100.64.0.1', '169.254.1.2', '0.0.0.0')
+                self.assertEqual(bool(ConsoleSessions.local_origin(handler, issuing=True, allow_lan=True)), expected)
+                self.assertIsNone(ConsoleSessions.local_origin(handler, issuing=True))
+                headers['X-Forwarded-For'] = '192.168.1.2'
+                self.assertIsNone(ConsoleSessions.local_origin(handler, issuing=True, allow_lan=True))
 
     def test_spoofing_cross_site_and_invalid_explicit_credentials_fail(self):
         self.register()

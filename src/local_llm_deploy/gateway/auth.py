@@ -104,21 +104,41 @@ class ConsoleSessions:
         return values[0] if len(values) == 1 else None
 
     @classmethod
-    def local_origin(cls, handler, *, issuing=False):
+    def local_origin(cls, handler, *, issuing=False, allow_lan=False):
+        def trusted_address(value):
+            address = ipaddress.ip_address(value)
+            if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+                address = address.ipv4_mapped
+            networks = ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7')
+            return address.is_loopback or (allow_lan and any(
+                address in ipaddress.ip_network(network) for network in networks))
+
         headers = handler.headers
-        # Reverse proxies are intentionally ineligible, even when their final
-        # connection to this server comes from a loopback socket. A publishing
-        # proxy MUST overwrite these markers itself and strip X-Local-Console:
-        # Docker Desktop can make a transparent remote TCP relay appear local.
-        # Client-supplied Host/Origin headers cannot distinguish that relay.
-        if any(name.lower() in ('forwarded', 'via', 'x-real-ip') or
-               name.lower().startswith('x-forwarded-') for name in headers):
-            return None
+        # Console grants reject proxies. Mounted app grants additionally accept
+        # private clients through the VPN HTTP ingress below. The ingress must
+        # overwrite forwarding markers: Docker can make its socket look local.
+        forwarded = any(name.lower() in ('forwarded', 'via', 'x-real-ip') or
+                        name.lower().startswith('x-forwarded-') for name in headers)
+        if forwarded:
+            # Only mounted apps accept the VPN ingress contract. Its nginx
+            # overwrites these headers; never accept a forwarded address chain.
+            if not allow_lan or cls._header(headers, 'Forwarded') != 'for=unknown;by=vpn-ingress':
+                return None
+            if (cls._header(headers, 'Via') != '1.1 vpn-ingress' or
+                    cls._header(headers, 'X-Forwarded-Host') != cls._header(headers, 'Host') or
+                    cls._header(headers, 'X-Forwarded-Proto') != 'http' or
+                    headers.get_all('X-Real-IP', [])):
+                return None
+            try:
+                if not trusted_address(cls._header(headers, 'X-Forwarded-For')):
+                    return None
+            except (ValueError, TypeError):
+                return None
         try:
             peer = ipaddress.ip_address(handler.client_address[0])
             if isinstance(peer, ipaddress.IPv6Address) and peer.ipv4_mapped:
                 peer = peer.ipv4_mapped
-            if not peer.is_loopback:
+            if not trusted_address(peer):
                 return None
             authority = cls._header(headers, 'Host')
             if not authority or any(char.isspace() for char in authority):
@@ -127,7 +147,7 @@ class ConsoleSessions:
             if (parsed.username is not None or parsed.password is not None or
                     parsed.path or parsed.query or parsed.fragment or '%' in authority):
                 return None
-            if parsed.hostname != 'localhost' and not ipaddress.ip_address(parsed.hostname).is_loopback:
+            if parsed.hostname != 'localhost' and not trusted_address(parsed.hostname):
                 return None
             if (80 if parsed.port is None else parsed.port) != handler.server.server_port:
                 return None

@@ -87,11 +87,11 @@ class MountedAppAuth:
             raise RoutingError(400, 'App session requests must not contain a body')
         cookie = None
         if method == 'POST':
-            # Reuse the gateway's direct same-origin localhost trust boundary.
+            # Allow direct same-origin LAN access for mounted apps.
             # An explicitly invalid credential never falls back to local trust.
-            local = not handler.headers.get('Authorization') and ConsoleSessions.local_origin(handler, issuing=True)
+            local = not handler.headers.get('Authorization') and ConsoleSessions.local_origin(handler, issuing=True, allow_lan=True)
             if not authorized and not local:
-                raise RoutingError(401, '请使用统一网关凭据登录；自动认证仅支持本机同源入口')
+                raise RoutingError(401, '请使用统一网关凭据登录；自动认证仅支持本机或局域网同源入口')
             token = secrets.token_urlsafe(32)
             with self.lock:
                 if len(self.sessions) >= 256:
